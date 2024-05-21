@@ -2,9 +2,9 @@
 
 clozza.js is a simplified version of my Javascript chess engine Lozza.
 
-Within clozza.js is a hand-crafted translation of the Javascript to C.  
+Within clozza.js is also a hand-crafted translation of the Javascript to C.  
 
-The idea is find out what the ELO difference is between C and V8 Javascript in a chess engine context.
+The idea being to find out what the ELO difference is between C and V8 Javascript in a chess engine context.
 
 Example use:-
 
