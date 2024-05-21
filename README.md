@@ -2,16 +2,14 @@
 
 clozza.js is a simplified version of my Javascript chess engine Lozza.
 
-Within clozza.js is also a hand-crafted translation of the Javascript to C.  
+clozza.c is a hand-crafted translation of clozza.js into C.  
 
 The idea being to find out what the ELO difference is between C and V8 Javascript in a chess engine context.
 
 Example use:-
 
 <pre>
-dos2unix clozza.js  
 node clozza.js bench q
-awk '/\/\/cstart/{flag=1; next} /\/\/cend/{flag=0} flag' clozza.js > clozza.c
 clang -o clozza other-options clozza.c
 ./clozza bench q
 </pre>
