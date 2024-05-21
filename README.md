@@ -9,6 +9,7 @@ The idea being to find out what the ELO difference is between C and V8 Javascrip
 Example use:-
 
 <pre>
+dos2unix clozza.js  
 node clozza.js bench q
 awk '/\/\/cstart/{flag=1; next} /\/\/cend/{flag=0} flag' clozza.js > clozza.c
 clang -o clozza other-options clozza.c
