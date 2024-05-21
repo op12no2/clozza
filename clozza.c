@@ -5,20 +5,678 @@
 #include <stdint.h>
 #include <assert.h>
 
+//{{{  board
+
+//{{{  constants
+
+#define len(s) ((int)strlen(s))
+
+#define WHITE 0x0
+#define BLACK 0x8
+
+#define PIECE_MASK  0x7
+#define COLOUR_MASK 0x8
+
+#define PAWN   1
+#define KNIGHT 2
+#define BISHOP 3
+#define ROOK   4
+#define QUEEN  5
+#define KING   6
+#define EDGE   7
+
+#define W_PAWN   PAWN
+#define W_KNIGHT KNIGHT
+#define W_BISHOP BISHOP
+#define W_ROOK   ROOK
+#define W_QUEEN  QUEEN
+#define W_KING   KING
+
+#define B_PAWN   PAWN   | BLACK
+#define B_KNIGHT KNIGHT | BLACK
+#define B_BISHOP BISHOP | BLACK
+#define B_ROOK   ROOK   | BLACK
+#define B_QUEEN  QUEEN  | BLACK
+#define B_KING   KING   | BLACK
+
+#define WHITE_RIGHTS_KING  0x1
+#define WHITE_RIGHTS_QUEEN 0x2
+#define BLACK_RIGHTS_KING  0x4
+#define BLACK_RIGHTS_QUEEN 0x8
+#define WHITE_RIGHTS       WHITE_RIGHTS_QUEEN | WHITE_RIGHTS_KING
+#define BLACK_RIGHTS       BLACK_RIGHTS_QUEEN | BLACK_RIGHTS_KING
+
+const int MASK_RIGHTS[144] = {15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
+                              15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
+                              15, 15, ~8, 15, 15, 15, ~12,15, 15, ~4, 15, 15,
+                              15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
+                              15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
+                              15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
+                              15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
+                              15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
+                              15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
+                              15, 15, ~2, 15, 15, 15, ~3, 15, 15, ~1, 15, 15,
+                              15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
+                              15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15};
+
+
+const int ADJACENT[14] = {1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1};
+
+//
+// E == EMPTY, X = OFF BOARD, - == CANNOT HAPPEN
+//
+//                  0  1  2  3  4  5  6  7  8  9  10 11 12 13 14 15
+//                  E  W  W  W  W  W  W  X  -  B  B  B  B  B  B  -
+//                  E  P  N  B  R  Q  K  X  -  P  N  B  R  Q  K  -
+//
+
+const int IS_O[]       = {0, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 0};
+const int IS_E[]       = {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+const int IS_OE[]      = {1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 0};
+
+const int IS_P[]       = {0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0};
+const int IS_N[]       = {0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0};
+const int IS_NBRQ[]    = {0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0};
+const int IS_NBRQKE[]  = {1, 0, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 0};
+const int IS_RQKE[]    = {1, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 1, 1, 1, 0};
+const int IS_Q[]       = {0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0};
+const int IS_QKE[]     = {1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1, 0};
+const int IS_K[]       = {0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0};
+const int IS_KN[]      = {0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0};
+const int IS_SLIDER[]  = {0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0};
+
+const int IS_W[]       = {0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+const int IS_WE[]      = {1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+const int IS_WP[]      = {0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+const int IS_WN[]      = {0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+const int IS_WNBRQ[]   = {0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+const int IS_WPNBRQ[]  = {0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+const int IS_WPNBRQE[] = {1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+const int IS_WB[]      = {0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+const int IS_WR[]      = {0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+const int IS_WBQ[]     = {0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+const int IS_WRQ[]     = {0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+const int IS_WQ[]      = {0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+const int IS_WK[]      = {0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+
+const int IS_B[]       = {0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0};
+const int IS_BE[]      = {1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0};
+const int IS_BP[]      = {0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0};
+const int IS_BN[]      = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0};
+const int IS_BNBRQ[]   = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0};
+const int IS_BPNBRQ[]  = {0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0};
+const int IS_BPNBRQE[] = {1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0};
+const int IS_BB[]      = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0};
+const int IS_BR[]      = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0};
+const int IS_BBQ[]     = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0};
+const int IS_BRQ[]     = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0};
+const int IS_BQ[]      = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0};
+const int IS_BK[]      = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0};
+
+const char OBJ_CHAR[] = {'.','P','N','B','R','Q','K','x','y','p','n','b','r','q','k','z'};
+
+#define A1 110
+#define B1 111
+#define C1 112
+#define D1 113
+#define E1 114
+#define F1 115
+#define G1 116
+#define H1 117
+#define B2 99
+#define C2 100
+#define G2 10
+#define H2 105
+#define B7 39
+#define C7 40
+#define G7 44
+#define H7 45
+#define A8 26
+#define B8 27
+#define C8 28
+#define D8 29
+#define E8 30
+#define F8 31
+#define G8 32
+#define H8 33
+
+const int B88[] = {26, 27, 28, 29, 30, 31, 32, 33,
+                   38, 39, 40, 41, 42, 43, 44, 45,
+                   50, 51, 52, 53, 54, 55, 56, 57,
+                   62, 63, 64, 65, 66, 67, 68, 69,
+                   74, 75, 76, 77, 78, 79, 80, 81,
+                   86, 87, 88, 89, 90, 91, 92, 93,
+                   98, 99, 100,101,102,103,104,105,
+                   110,111,112,113,114,115,116,117};
+
+const char * const COORDS[] = {"??", "??", "??", "??", "??", "??", "??", "??", "??", "??", "??", "??",
+                               "??", "??", "??", "??", "??", "??", "??", "??", "??", "??", "??", "??",
+                               "??", "??", "a8", "b8", "c8", "d8", "e8", "f8", "g8", "h8", "??", "??",
+                               "??", "??", "a7", "b7", "c7", "d7", "e7", "f7", "g7", "h7", "??", "??",
+                               "??", "??", "a6", "b6", "c6", "d6", "e6", "f6", "g6", "h6", "??", "??",
+                               "??", "??", "a5", "b5", "c5", "d5", "e5", "f5", "g5", "h5", "??", "??",
+                               "??", "??", "a4", "b4", "c4", "d4", "e4", "f4", "g4", "h4", "??", "??",
+                               "??", "??", "a3", "b3", "c3", "d3", "e3", "f3", "g3", "h3", "??", "??",
+                               "??", "??", "a2", "b2", "c2", "d2", "e2", "f2", "g2", "h2", "??", "??",
+                               "??", "??", "a1", "b1", "c1", "d1", "e1", "f1", "g1", "h1", "??", "??",
+                               "??", "??", "??", "??", "??", "??", "??", "??", "??", "??", "??", "??",
+                               "??", "??", "??", "??", "??", "??", "??", "??", "??", "??", "??", "??"};
+
+const int RANK[] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                    0, 0, 8, 8, 8, 8, 8, 8, 8, 8, 0, 0,
+                    0, 0, 7, 7, 7, 7, 7, 7, 7, 7, 0, 0,
+                    0, 0, 6, 6, 6, 6, 6, 6, 6, 6, 0, 0,
+                    0, 0, 5, 5, 5, 5, 5, 5, 5, 5, 0, 0,
+                    0, 0, 4, 4, 4, 4, 4, 4, 4, 4, 0, 0,
+                    0, 0, 3, 3, 3, 3, 3, 3, 3, 3, 0, 0,
+                    0, 0, 2, 2, 2, 2, 2, 2, 2, 2, 0, 0,
+                    0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0,
+                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+
+const int FYLE[] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                    0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 0,
+                    0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 0,
+                    0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 0,
+                    0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 0,
+                    0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 0,
+                    0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 0,
+                    0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 0,
+                    0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 0,
+                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+
+const int CENTRE[] = {0, 0, 0, 0,  0,  0,  0,  0,  0,  0, 0, 0,
+                      0, 0, 0, 0,  0,  0,  0,  0,  0,  0, 0, 0,
+                      0, 0, 1, 2,  3,  4,  4,  3,  2,  1, 0, 0,
+                      0, 0, 2, 6,  8,  10, 10, 8,  6,  2, 0, 0,
+                      0, 0, 3, 8,  15, 18, 18, 15, 8,  3, 0, 0,
+                      0, 0, 4, 10, 18, 28, 28, 18, 10, 4, 0, 0,
+                      0, 0, 4, 10, 18, 28, 28, 19, 10, 4, 0, 0,
+                      0, 0, 3, 8,  15, 18, 18, 15, 8,  3, 0, 0,
+                      0, 0, 2, 6,  8,  10, 10, 8,  6,  2, 0, 0,
+                      0, 0, 1, 2,  3,  4,  4,  3,  2,  1, 0, 0,
+                      0, 0, 0, 0,  0,  0,  0,  0,  0,  0, 0, 0,
+                      0, 0, 0, 0,  0,  0,  0,  0,  0,  0, 0, 0};
+
+//}}}
+
+int bBoard[144];
+int bTurn     = 0;
+int bRights   = 0;
+int bEP       = 0;
+int bPly      = 0;
+int bKings[2] = {0,0};
+
+//{{{  board primitives
+
+int objColour (int obj) {
+  return obj & COLOUR_MASK;
+}
+
+int objPiece (int obj) {
+  return obj & PIECE_MASK;
+}
+
+int colourIndex (int c) {
+  return c >> 3;
+}
+
+int colourtoggleIndex (int i) {
+  return abs(i-1);
+}
+
+int colourMultiplier (int c) {
+  return (-c >> 31) | 1;
+}
+
+int colourToggle (int c) {
+  return ~c & COLOUR_MASK;
+}
+
+//}}}
+//{{{  printBoard
+
+void printBoard () {
+
+  int *b = bBoard;
+
+  for (int rank=7; rank >= 0; rank--) {
+    printf("%d ", (rank+1));
+    for (int file=0; file <= 7; file++) {
+      printf("%c ", OBJ_CHAR[b[B88[(7-rank)*8+file]]]);
+    }
+    printf("\n");
+  }
+  printf("  a b c d e f g h\n");
+
+  if (bTurn == WHITE)
+    printf("w");
+  else
+    printf("b");
+  printf(" ");
+
+  if (bRights) {
+    if (bRights & WHITE_RIGHTS_KING)
+      printf("K");
+   if (bRights & WHITE_RIGHTS_QUEEN)
+      printf("Q");
+   if (bRights & BLACK_RIGHTS_KING)
+      printf("k");
+   if (bRights & BLACK_RIGHTS_QUEEN)
+      printf("q");
+    printf(" ");
+  }
+  else
+    printf("- ");
+
+  if (bEP)
+    printf("%s",COORDS[bEP]);
+  else
+    printf("-");
+
+  printf("\n");
+
+  //hack console.log('hash',hLo[0],hHi[0]);
+}
+
+//}}}
+//{{{  position
+
+void position (char *sb, char *st, char *sr, char *sep) {
+
+  int *b = bBoard;
+
+  for (int i=0; i < 144; i++)
+    b[i] = EDGE;
+
+  for (int i=0; i < 64; i++)
+    b[B88[i]] = 0;
+
+  //{{{  board board
+  
+  int rank = 7;
+  int file = 0;
+  
+  for (int i=0; i < len(sb); i++) {
+  
+    const char ch  = sb[i];
+    const int sq88 = (7-rank) * 8 + file;
+    const int sq   = B88[sq88];
+  
+    switch (ch) {
+      //{{{  1-8
+      
+      case '1':
+        file += 1;
+        break;
+      case '2':
+        file += 2;
+        break;
+      case '3':
+        file += 3;
+        break;
+      case '4':
+        file += 4;
+        break;
+      case '5':
+        file += 5;
+        break;
+      case '6':
+        file += 6;
+        break;
+      case '7':
+        file += 7;
+        break;
+      case '8':
+        break;
+      
+      //}}}
+      //{{{  /
+      
+      case '/':
+        rank--;
+        file = 0;
+        break;
+      
+      //}}}
+      //{{{  black
+      
+      case 'p':
+        b[sq] = B_PAWN;
+        file++;
+        break;
+      case 'n':
+        b[sq] = B_KNIGHT;
+        file++;
+        break;
+      case 'b':
+        b[sq] = B_BISHOP;
+        file++;
+        break;
+      case 'r':
+        b[sq] = B_ROOK;
+        file++;
+        break;
+      case 'q':
+        b[sq] = B_QUEEN;
+        file++;
+        break;
+      case 'k':
+        b[sq] = B_KING;
+        bKings[1] = sq;
+        file++;
+        break;
+      
+      //}}}
+      //{{{  white
+      
+      case 'P':
+        b[sq] = W_PAWN;
+        file++;
+        break;
+      case 'N':
+        b[sq] = W_KNIGHT;
+        file++;
+        break;
+      case 'B':
+        b[sq] = W_BISHOP;
+        file++;
+        break;
+      case 'R':
+        b[sq] = W_ROOK;
+        file++;
+        break;
+      case 'Q':
+        b[sq] = W_QUEEN;
+        file++;
+        break;
+      case 'K':
+        b[sq] = W_KING;
+        bKings[0] = sq;
+        file++;
+        break;
+      
+      //}}}
+    }
+  }
+  
+  //}}}
+  //{{{  board turn
+  
+  if (st[0] == 'w')
+    bTurn = WHITE;
+  
+  else if (st[0] == 'b')
+    bTurn = BLACK;
+  
+  else
+    printf("unknown board colour %s\n", st);
+  
+  //}}}
+  //{{{  board rights
+  
+  bRights = 0;
+  
+  for (int i=0; i < len(sr); i++) {
+  
+    const char ch = sr[i];
+  
+    if (ch == 'K') bRights |= WHITE_RIGHTS_KING;
+    if (ch == 'Q') bRights |= WHITE_RIGHTS_QUEEN;
+    if (ch == 'k') bRights |= BLACK_RIGHTS_KING;
+    if (ch == 'q') bRights |= BLACK_RIGHTS_QUEEN;
+  }
+  
+  //}}}
+  //{{{  board ep
+  
+  bEP = 0;
+  
+  if (len(sep) == 2) {
+    for (int i=0; i < 144; i++) {
+      if (!strcmp(COORDS[i],sep)) {
+        bEP = i;
+        break;
+      }
+    }
+  }
+  
+  //}}}
+
+  //hack hashCalc()
+
+  bPly = 0;
+}
+
+//}}}
+
+//}}}
+//{{{  eval
+
+//{{{  constants
+
+int MATERIAL[] = {100,320,330,500,900,20000};
+
+int WPAWN_PST[] = {0, 0, 0,  0,  0,   0,   0,   0,   0,  0,  0, 0,
+                   0, 0, 0,  0,  0,   0,   0,   0,   0,  0,  0, 0,
+                   0, 0, 0,  0,  0,   0,   0,   0,   0,  0,  0, 0,
+                   0, 0, 50, 50, 50,  50,  50,  50,  50, 50, 0, 0,
+                   0, 0, 10, 10, 20,  30,  30,  20,  10, 10, 0, 0,
+                   0, 0, 5,  5,  10,  25,  25,  10,  5,  5,  0, 0,
+                   0, 0, 0,  0,  0,   20,  20,  0,   0,  0,  0, 0,
+                   0, 0, 5,  -5, -10, 0,   0,   -10, -5, 5,  0, 0,
+                   0, 0, 5,  10, 10,  -20, -20, 10,  10, 5,  0, 0,
+                   0, 0, 0,  0,  0,   0,   0,   0,   0,  0,  0, 0,
+                   0, 0, 0,  0,  0,   0,   0,   0,   0,  0,  0, 0,
+                   0, 0, 0,  0,  0,   0,   0,   0,   0,  0,  0, 0};
+
+int WKNIGHT_PST[] = {0, 0, 0,   0,   0,   0,   0,   0,   0,   0,   0, 0,
+                     0, 0, 0,   0,   0,   0,   0,   0,   0,   0,   0, 0,
+                     0, 0, -50, -40, -30, -30, -30, -30, -40, -50, 0, 0,
+                     0, 0, -40, -20, 0,   0,   0,   0,   -20, -40, 0, 0,
+                     0, 0, -30, 0,   10,  15,  15,  10,   0,  -30, 0, 0,
+                     0, 0, -30, 5,   15,  20,  20,  15,   5,  -30, 0, 0,
+                     0, 0, -30, 0,   15,  20,  20,  15,   0,  -30, 0, 0,
+                     0, 0, -30, 5,   10,  15,  15,  10,   5,  -30, 0, 0,
+                     0, 0, -40, -20, 0,   5,   5,   0,   -20, -40, 0, 0,
+                     0, 0, -50, -40, -30, -30, -30, -30, -40, -50, 0, 0,
+                     0, 0, 0,   0,   0,   0,   0,   0,   0,   0,   0, 0,
+                     0, 0, 0,   0,   0,   0,   0,   0,   0,   0,   0, 0};
+
+int WBISHOP_PST[] = {0, 0, 0,   0,   0,   0,   0,   0,   0,   0,   0, 0,
+                     0, 0, 0,   0,   0,   0,   0,   0,   0,   0,   0, 0,
+                     0, 0, -20, -10, -10, -10, -10, -10, -10, -20, 0, 0,
+                     0, 0, -10, 0,   0,   0,   0,   0,    0,  -10, 0, 0,
+                     0, 0, -10, 0,   5,   10,  10,  5,    0,  -10, 0, 0,
+                     0, 0, -10, 5,   5,   10,  10,  5,    5,  -10, 0, 0,
+                     0, 0, -10, 0,   10,  10,  10,  10,   0,  -10, 0, 0,
+                     0, 0, -10, 10,  10,  10,  10,  10,   10, -10, 0, 0,
+                     0, 0, -10, 5 ,   0,   0,   0,   0,   5,  -10, 0, 0,
+                     0, 0, -20, -10, -10, -10, -10, -10, -10, -20, 0, 0,
+                     0, 0, 0,   0,   0,   0,   0,   0,   0,   0,   0, 0,
+                     0, 0, 0,   0,   0,   0,   0,   0,   0,   0,   0, 0};
+int WROOK_PST[] = {0, 0, 0,   0,   0,   0,   0,   0,   0,   0,  0, 0,
+                   0, 0, 0,   0,   0,   0,   0,   0,   0,   0,  0, 0,
+                   0, 0, 0,   0,   0,   0,   0,   0,   0,   0,  0, 0,
+                   0, 0, 5,   10,  10,  10,  10,  10,  10,  5,  0, 0,
+                   0, 0, -5,  0,   0,   0,   0,   0,   0,   -5, 0, 0,
+                   0, 0, -5,  0,   0,   0,   0,   0,   0,   -5, 0, 0,
+                   0, 0, -5,  0,   0,   0,   0,   0,   0,   -5, 0, 0,
+                   0, 0, -5,  0,   0,   0,   0,   0,   0,   -5, 0, 0,
+                   0, 0, -5,  0,   0,   0,   0,   0,   0,   -5, 0, 0,
+                   0, 0, 0,   0,   0,   5,   5,   0,   0,   0,  0, 0,
+                   0, 0, 0,   0,   0,   0,   0,   0,   0,   0,  0, 0,
+                   0, 0, 0,   0,   0,   0,   0,   0,   0,   0,  0, 0};
+
+int WQUEEN_PST[] = {0, 0, 0,   0,   0,   0,   0,   0,   0,   0,   0, 0,
+                    0, 0, 0,   0,   0,   0,   0,   0,   0,   0,   0, 0,
+                    0, 0, -20, -10, -10, -5,  -5,  -10, -10, -20, 0, 0,
+                    0, 0, -10, 0,   0,   0,   0,   0,    0,  -10, 0, 0,
+                    0, 0, -10, 0,   5,   5,   5,   5,    0,  -10, 0, 0,
+                    0, 0, -5,  0,   5,   5,   5,   5,    0,  -5,  0, 0,
+                    0, 0,  0,  0,   5,   5,   5,   5,    0,  -5,  0, 0,
+                    0, 0, -10, 5,   5,   5,   5,   5,    0,  -10, 0, 0,
+                    0, 0, -10, 0,   5,   0,   0,   0,    0,  -10, 0, 0,
+                    0, 0, -20, -10, -10, -5,  -5,  -10, -10, -20, 0, 0,
+                    0, 0, 0,   0,   0,   0,   0,   0,   0,   0,   0, 0,
+                    0, 0, 0,   0,   0,   0,   0,   0,   0,   0,   0, 0};
+
+int WKING_MID_PST[] = {0, 0, 0,   0,   0,   0,   0,   0,   0,   0,   0, 0,
+                       0, 0, 0,   0,   0,   0,   0,   0,   0,   0,   0, 0,
+                       0, 0, -30, -40, -40, -50, -50, -40, -40, -30, 0, 0,
+                       0, 0, -30, -40, -40, -50, -50, -40, -40, -30, 0, 0,
+                       0, 0, -30, -40, -40, -50, -50, -40, -40, -30, 0, 0,
+                       0, 0, -30, -40, -40, -50, -50, -40, -40, -30, 0, 0,
+                       0, 0, -20, -30, -30, -40, -40, -30, -30, -20, 0, 0,
+                       0, 0, -10, -20, -20, -20, -20, -20, -20, -10, 0, 0,
+                       0, 0, 20,  20,  0,   0,   0,   0,   20,  20,  0, 0,
+                       0, 0, 20,  30,  10,  0,   0,   10,  30,  20,  0, 0,
+                       0, 0, 0,   0,   0,   0,   0,   0,   0,   0,   0, 0,
+                       0, 0, 0,   0,   0,   0,   0,   0,   0,   0,   0, 0};
+
+int WKING_END_PST[] = {0, 0, 0,   0,   0,   0,   0,   0,   0,   0,  0, 0,
+                       0, 0, 0,   0,   0,   0,   0,   0,   0,   0,  0, 0,
+                       0, 0, -50, -40, -30, -20, -20, -30, -40, -50,0, 0,
+                       0, 0, -30, -20, -10, 0,   0,   -10, -20, -30,0, 0,
+                       0, 0, -30, -10, 20,  30,  30,  20,  -10, -30,0, 0,
+                       0, 0, -30, -10, 30,  40,  40,  30,  -10, -30,0, 0,
+                       0, 0, -30, -10, 30,  40,  40,  30,  -10, -30,0, 0,
+                       0, 0, -30, -10, 20,  30,  30,  20,  -10, -30,0, 0,
+                       0, 0, -30, -30, 0,   0,   0,   0,   -30, -30,0, 0,
+                       0, 0, -50, -30, -30, -30, -30, -30, -30, -50,0, 0,
+                       0, 0, 0,   0,   0,   0,   0,   0,   0,   0,  0, 0,
+                       0, 0, 0,   0,   0,   0,   0,   0,   0,   0,  0, 0};
+
+int BPAWN_PST[144];
+int BKNIGHT_PST[144];
+int BBISHOP_PST[144];
+int BROOK_PST[144];
+int BQUEEN_PST[144];
+int BKING_MID_PST[144];
+int BKING_END_PST[144];
+
+int *WHITE_MID_PST[] = {WPAWN_PST, WKNIGHT_PST, WBISHOP_PST, WROOK_PST, WQUEEN_PST, WKING_MID_PST};
+int *WHITE_END_PST[] = {WPAWN_PST, WKNIGHT_PST, WBISHOP_PST, WROOK_PST, WQUEEN_PST, WKING_END_PST};
+int *BLACK_MID_PST[] = {BPAWN_PST, BKNIGHT_PST, BBISHOP_PST, BROOK_PST, BQUEEN_PST, BKING_MID_PST};
+int *BLACK_END_PST[] = {BPAWN_PST, BKNIGHT_PST, BBISHOP_PST, BROOK_PST, BQUEEN_PST, BKING_END_PST};
+
+int **WB_MID_PST[] = {WHITE_MID_PST, BLACK_MID_PST};
+int **WB_END_PST[] = {WHITE_END_PST, BLACK_END_PST};
+
+//}}}
+
+//{{{  evaluate
+
+int evaluate () {
+
+  int *b = bBoard;
+
+  const int cx = colourMultiplier(bTurn);
+
+  int e = 10 * cx;
+
+  int pst_mid = 0;
+  int pst_end = 0;
+
+  int q = 0;
+
+  for (int sq=0; sq<64; sq++) {
+
+    const int fr    = B88[sq];
+    const int frObj = b[fr];
+
+    if (!frObj)
+      continue;
+
+    const int frPiece  = objPiece(frObj) - 1;
+    const int frColour = objColour(frObj);
+    const int frIndex  = colourIndex(frColour);
+    const int frMult   = colourMultiplier(frColour);
+
+    e += MATERIAL[frPiece] * frMult;
+
+    pst_mid += WB_MID_PST[frIndex][frPiece][fr] * frMult;
+    pst_end += WB_END_PST[frIndex][frPiece][fr] * frMult;
+
+    q += IS_Q[frObj];
+  }
+
+  if (q)
+    return (e + pst_mid) * cx;
+  else
+    return (e + pst_end) * cx;
+}
+
+//}}}
+//{{{  flip
+
+int flip (sq) {
+  const int m = (143-sq)/12;
+  return 12*m + sq%12;
+}
+
+//}}}
+//{{{  evalInitOnce
+
+void evalInitOnce () {
+
+  for (int i=0; i < 144; i++) {
+
+    const int j = flip(i);
+
+    BPAWN_PST[j]     = WPAWN_PST[i];
+    BKNIGHT_PST[j]   = WKNIGHT_PST[i];
+    BBISHOP_PST[j]   = WBISHOP_PST[i];
+    BROOK_PST[j]     = WROOK_PST[i];
+    BQUEEN_PST[j]    = WQUEEN_PST[i];
+    BKING_MID_PST[j] = WKING_MID_PST[i];
+    BKING_END_PST[j] = WKING_END_PST[i];
+  }
+
+}
+
+//}}}
+
+//}}}
+//{{{  uci
+
 //{{{  uciTokens
 
 int uciTokens(int n, char **tokens) {
 
   char *cmd = tokens[0];
 
-  if (!strcmp(cmd,"q")) {
-    return 1;
+  if (!strcmp(cmd,"position") || !strcmp(cmd,"p")) {
+    char *cmd2 = tokens[1];
+    if (!strcmp(cmd2,"startpos") || !strcmp(cmd2,"s")) {
+      position("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR", "w", "KQkq", "-");
+    }
+  }
+
+  else if (!strcmp(cmd,"ucinewgame") || !strcmp(cmd,"u")) {
+    ;
   }
 
   else if (!strcmp(cmd,"uci")) {
     printf("id name clozza 1\n");
     printf("id author Colin Jenkins\n");
     printf("uciok\n");
+  }
+
+  else if (!strcmp(cmd,"b")) {
+    printBoard();
+  }
+
+  else if (!strcmp(cmd,"e")) {
+    const int e = evaluate();
+    printf("%d\n",e);
+  }
+
+  else if (!strcmp(cmd,"q")) {
+    return 1;
   }
 
   else {
@@ -54,11 +712,15 @@ int uciExec (char *line) {
 
 //}}}
 
+//}}}
+
 #define MAX_LINE_LENGTH 8192
 
 int main(int argc, char **argv) {
 
   char chunk[MAX_LINE_LENGTH];
+
+  evalInitOnce();
 
   //{{{  exec args
   
@@ -79,6 +741,8 @@ int main(int argc, char **argv) {
 
   return 0;
 }
+
+//{{{  todo
 
 /*
 
@@ -578,26 +1242,6 @@ const QPRO = (QUEEN-2)  << MOVE_PROMAS_BITS | MOVE_PROMOTE_MASK;
 const RPRO = (ROOK-2)   << MOVE_PROMAS_BITS | MOVE_PROMOTE_MASK;
 const BPRO = (BISHOP-2) << MOVE_PROMAS_BITS | MOVE_PROMOTE_MASK;
 const NPRO = (KNIGHT-2) << MOVE_PROMAS_BITS | MOVE_PROMOTE_MASK;
-
-const WHITE_RIGHTS_KING  = 0x00000001;
-const WHITE_RIGHTS_QUEEN = 0x00000002;
-const BLACK_RIGHTS_KING  = 0x00000004;
-const BLACK_RIGHTS_QUEEN = 0x00000008;
-const WHITE_RIGHTS       = WHITE_RIGHTS_QUEEN | WHITE_RIGHTS_KING;
-const BLACK_RIGHTS       = BLACK_RIGHTS_QUEEN | BLACK_RIGHTS_KING;
-
-const MASK_RIGHTS = [15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
-                     15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
-                     15, 15, ~8, 15, 15, 15, ~12,15, 15, ~4, 15, 15,
-                     15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
-                     15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
-                     15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
-                     15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
-                     15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
-                     15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
-                     15, 15, ~2, 15, 15, 15, ~3, 15, 15, ~1, 15, 15,
-                     15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
-                     15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15];
 
 const W_OFFSET_ORTH  = -12;
 const W_OFFSET_DIAG1 = -13;
@@ -1700,172 +2344,6 @@ function newGame () {
 }
 
 //}}}
-//{{{  position
-
-function position (sb, st, sr, sep) {
-
-  const b = bBoard;
-
-  b.fill(EDGE);
-
-  for (let i=0; i < 64; i++)
-    b[B88[i]] = 0;
-
-  //{{{  board board
-  
-  var sq   = 0;
-  var rank = 7;
-  var file = 0;
-  
-  for (let i=0; i < sb.length; i++) {
-  
-    const ch   = sb.charAt(i);
-    const sq88 = (7-rank) * 8 + file;
-    const sq   = B88[sq88];
-  
-    switch (ch) {
-      //{{{  1-8
-      
-      case '1':
-        file += 1;
-        break;
-      case '2':
-        file += 2;
-        break;
-      case '3':
-        file += 3;
-        break;
-      case '4':
-        file += 4;
-        break;
-      case '5':
-        file += 5;
-        break;
-      case '6':
-        file += 6;
-        break;
-      case '7':
-        file += 7;
-        break;
-      case '8':
-        break;
-      
-      //}}}
-      //{{{  /
-      
-      case '/':
-        rank--;
-        file = 0;
-        break;
-      
-      //}}}
-      //{{{  black
-      
-      case 'p':
-        b[sq] = B_PAWN;
-        file++;
-        break;
-      case 'n':
-        b[sq] = B_KNIGHT;
-        file++;
-        break;
-      case 'b':
-        b[sq] = B_BISHOP;
-        file++;
-        break;
-      case 'r':
-        b[sq] = B_ROOK;
-        file++;
-        break;
-      case 'q':
-        b[sq] = B_QUEEN;
-        file++;
-        break;
-      case 'k':
-        b[sq] = B_KING;
-        bKings[1] = sq;
-        file++;
-        break;
-      
-      //}}}
-      //{{{  white
-      
-      case 'P':
-        b[sq] = W_PAWN;
-        file++;
-        break;
-      case 'N':
-        b[sq] = W_KNIGHT;
-        file++;
-        break;
-      case 'B':
-        b[sq] = W_BISHOP;
-        file++;
-        break;
-      case 'R':
-        b[sq] = W_ROOK;
-        file++;
-        break;
-      case 'Q':
-        b[sq] = W_QUEEN;
-        file++;
-        break;
-      case 'K':
-        b[sq] = W_KING;
-        bKings[0] = sq;
-        file++;
-        break;
-      
-      //}}}
-      default:
-        console.log('unknown board char','|'+ch+'|');
-    }
-  }
-  
-  //}}}
-  //{{{  board turn
-  
-  if (st == 'w')
-    bTurn = WHITE;
-  
-  else if (st == 'b')
-    bTurn = BLACK;
-  
-  else
-    console.log('unknown board colour', st)
-  
-  //}}}
-  //{{{  board rights
-  
-  bRights = 0;
-  
-  for (let i=0; i < sr.length; i++) {
-  
-    const ch = sr.charAt(i);
-  
-    if (ch == 'K') bRights |= WHITE_RIGHTS_KING;
-    if (ch == 'Q') bRights |= WHITE_RIGHTS_QUEEN;
-    if (ch == 'k') bRights |= BLACK_RIGHTS_KING;
-    if (ch == 'q') bRights |= BLACK_RIGHTS_QUEEN;
-  }
-  
-  //}}}
-  //{{{  board ep
-  
-  if (sep.length == 2)
-    bEP = COORDS.indexOf(sep)
-  
-  else
-    bEP = 0;
-  
-  //}}}
-
-  hashCalc()
-
-  bPly = 0;
-}
-
-//}}}
 //{{{  playMove
 
 function playMove (uciMove) {
@@ -2696,4 +3174,6 @@ cacheInitOnce();
 evalInitOnce();
 
 */
+
+//}}}
 
