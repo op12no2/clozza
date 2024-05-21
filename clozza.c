@@ -4,12 +4,61 @@
 #include <string.h>
 #include <stdint.h>
 #include <assert.h>
+#include <sys/time.h>
 
-//{{{  board
+//{{{  misc
 
-//{{{  constants
+#define uint8  uint8_t
+#define int16  int16_t
+#define uint16 uint16_t
+#define uint32 uint32_t
+#define uint64 uint64_t
+#define move_t uint32_t
 
 #define len(s) ((int)strlen(s))
+
+#define MAX_PLY 100
+
+const int MATE = 32000;
+
+int mSilent = 0;
+
+//}}}
+//{{{  timing
+
+move_t tBestMove = 0;
+
+int tDone        = 0;
+int tNodes       = 0;
+int tTargetDepth = 0;
+int tTargetNodes = 0;
+
+uint32 tFinishTime = 0;
+
+//{{{  clock
+
+uint32 clock() {
+
+  struct timeval tv;
+
+  gettimeofday(&tv, NULL);
+
+  return (uint32)(tv.tv_sec * 1000) + (uint32)(tv.tv_usec / 1000);
+}
+
+//}}}
+//{{{  areWeDone
+
+int areWeDone() {
+  return tBestMove && ((tFinishTime && (clock() > tFinishTime)) || (tTargetNodes && (tNodes >= tTargetNodes)));
+}
+
+//}}}
+
+//}}}
+//{{{  board/hash
+
+//{{{  constants
 
 #define WHITE 0x0
 #define BLACK 0x8
@@ -32,19 +81,20 @@
 #define W_QUEEN  QUEEN
 #define W_KING   KING
 
-#define B_PAWN   PAWN   | BLACK
-#define B_KNIGHT KNIGHT | BLACK
-#define B_BISHOP BISHOP | BLACK
-#define B_ROOK   ROOK   | BLACK
-#define B_QUEEN  QUEEN  | BLACK
-#define B_KING   KING   | BLACK
+#define B_PAWN   (PAWN   | BLACK)
+#define B_KNIGHT (KNIGHT | BLACK)
+#define B_BISHOP (BISHOP | BLACK)
+#define B_ROOK   (ROOK   | BLACK)
+#define B_QUEEN  (QUEEN  | BLACK)
+#define B_KING   (KING   | BLACK)
 
 #define WHITE_RIGHTS_KING  0x1
 #define WHITE_RIGHTS_QUEEN 0x2
 #define BLACK_RIGHTS_KING  0x4
 #define BLACK_RIGHTS_QUEEN 0x8
-#define WHITE_RIGHTS       WHITE_RIGHTS_QUEEN | WHITE_RIGHTS_KING
-#define BLACK_RIGHTS       BLACK_RIGHTS_QUEEN | BLACK_RIGHTS_KING
+
+#define WHITE_RIGHTS  (WHITE_RIGHTS_QUEEN | WHITE_RIGHTS_KING)
+#define BLACK_RIGHTS  (BLACK_RIGHTS_QUEEN | BLACK_RIGHTS_KING)
 
 const int MASK_RIGHTS[144] = {15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
                               15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
@@ -60,7 +110,7 @@ const int MASK_RIGHTS[144] = {15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
                               15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15};
 
 
-const int ADJACENT[14] = {1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1};
+const int ADJACENT[144] = {1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0};
 
 //
 // E == EMPTY, X = OFF BOARD, - == CANNOT HAPPEN
@@ -69,6 +119,20 @@ const int ADJACENT[14] = {1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1};
 //                  E  W  W  W  W  W  W  X  -  B  B  B  B  B  B  -
 //                  E  P  N  B  R  Q  K  X  -  P  N  B  R  Q  K  -
 //
+
+#define W_OFFSET_ORTH  -12
+#define W_OFFSET_DIAG1 -13
+#define W_OFFSET_DIAG2 -11
+
+#define B_OFFSET_ORTH  12
+#define B_OFFSET_DIAG1 13
+#define B_OFFSET_DIAG2 11
+
+const int KNIGHT_OFFSETS[] = {25,-25,23,-23,14,-14,10,-10};
+const int BISHOP_OFFSETS[] = {11,-11,13,-13};
+const int ROOK_OFFSETS[]   = {1,-1,12,-12};
+const int QUEEN_OFFSETS[]  = {11,-11,13,-13,1,-1,12,-12};
+const int KING_OFFSETS[]   = {11,-11,13,-13,1,-1,12,-12};
 
 const int IS_O[]       = {0, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 0};
 const int IS_E[]       = {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
@@ -112,6 +176,21 @@ const int IS_BBQ[]     = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0};
 const int IS_BRQ[]     = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0};
 const int IS_BQ[]      = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0};
 const int IS_BK[]      = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0};
+
+const int *WB_CAN_CAPTURE[] = {IS_BPNBRQ, IS_WPNBRQ};
+const int *WB_OUR_PIECE[]   = {IS_W,      IS_B};
+const int *WB_RQ[]          = {IS_WRQ,    IS_BRQ};
+const int *WB_BQ[]          = {IS_WBQ,    IS_BBQ};
+
+const int WB_PAWN[] = {W_PAWN, B_PAWN};
+
+const int WB_OFFSET_ORTH[]  = {W_OFFSET_ORTH,  B_OFFSET_ORTH};
+const int WB_OFFSET_DIAG1[] = {W_OFFSET_DIAG1, B_OFFSET_DIAG1};
+const int WB_OFFSET_DIAG2[] = {W_OFFSET_DIAG2, B_OFFSET_DIAG2};
+
+const int WB_HOME_RANK[]    = {2, 7};
+const int WB_PROMOTE_RANK[] = {7, 2};
+const int WB_EP_RANK[]      = {5, 4};
 
 const char OBJ_CHAR[] = {'.','P','N','B','R','Q','K','x','y','p','n','b','r','q','k','z'};
 
@@ -210,6 +289,122 @@ int bEP       = 0;
 int bPly      = 0;
 int bKings[2] = {0,0};
 
+uint32 hSeed = 0;
+
+uint32 hLo = 0;
+uint32 hHi = 0;
+
+uint32 hLoTurn[9];
+uint32 hHiTurn[9];
+uint32 hLoRights[16];
+uint32 hHiRights[16];
+uint32 hLoEP[144];
+uint32 hHiEP[144];
+uint32 hLoObj[16][144] = {0};
+uint32 hHiObj[16][144] = {0};
+
+//{{{  rand32
+
+uint32 rand32 () {
+
+  hSeed ^= hSeed << 13;
+  hSeed ^= hSeed >> 17;
+  hSeed ^= hSeed << 5;
+
+  return hSeed;
+}
+
+//}}}
+//{{{  hashInitOnce
+
+void hashInitOnce () {
+
+  hSeed = 1804289383;
+
+  for (int i=0; i < 9; i++) {
+    hLoTurn[i] = rand32();
+    hHiTurn[i] = rand32();
+  }
+
+  for (int i=0; i < 16; i++) {
+    hLoRights[i] = rand32();
+    hHiRights[i] = rand32();
+  }
+
+  for (int i=0; i < 144; i++) {
+    hLoEP[i] = rand32();
+    hHiEP[i] = rand32();
+  }
+
+  for (int i=1; i < 16; i++) {
+    for (int j=0; j < 144; j++) {
+      hLoObj[i][j] = rand32();
+      hHiObj[i][j] = rand32();
+    }
+  }
+}
+
+//}}}
+//{{{  hashReset
+
+void hashReset() {
+
+  hLo = 0;
+  hHi = 0;
+}
+
+//}}}
+//{{{  hashTurn
+
+void hashTurn(int turn) {
+  hLo ^= hLoTurn[turn];
+  hHi ^= hHiTurn[turn];
+}
+
+//}}}
+//{{{  hashRights
+
+void hashRights (int rights) {
+  hLo ^= hLoRights[rights];
+  hHi ^= hHiRights[rights];
+}
+
+//}}}
+//{{{  hashEP
+
+void hashEP(int ep) {
+  hLo ^= hLoEP[ep];
+  hHi ^= hHiEP[ep];
+}
+
+//}}}
+//{{{  hashObj
+
+void hashObj(int obj, int sq) {
+  hLo ^= hLoObj[obj][sq];
+  hHi ^= hHiObj[obj][sq];
+}
+
+//}}}
+//{{{  hashCalc
+
+void hashCalc() {
+
+  hashReset();
+
+  for (int i=0; i < 64; i++) {
+    const int sq  = B88[i];
+    const int obj = bBoard[sq];
+    hashObj(obj,sq);
+  }
+
+  hashTurn(bTurn);
+  hashRights(bRights);
+  hashEP(bEP);
+}
+
+//}}}
+
 //{{{  board primitives
 
 int objColour (int obj) {
@@ -279,7 +474,7 @@ void printBoard () {
 
   printf("\n");
 
-  //hack console.log('hash',hLo[0],hHi[0]);
+  printf("hash %u %u\n",hLo,hHi);
 }
 
 //}}}
@@ -446,12 +641,108 @@ void position (char *sb, char *st, char *sr, char *sep) {
   
   //}}}
 
-  //hack hashCalc()
+  hashCalc();
 
   bPly = 0;
 }
 
 //}}}
+//{{{  isKingAttacked
+
+int isKingAttacked (int to, int byCol) {
+
+  int *b = bBoard;
+
+  const int cx = colourIndex(byCol);
+
+  const int OFFSET_DIAG1 = -WB_OFFSET_DIAG1[cx];
+  const int OFFSET_DIAG2 = -WB_OFFSET_DIAG2[cx];
+  const int BY_PAWN      = WB_PAWN[cx];
+  const int *RQ          = WB_RQ[cx];
+  const int *BQ          = WB_BQ[cx];
+  const int N            = KNIGHT | byCol;
+
+  int fr = 0;
+
+  //{{{  pawns
+  
+  if (b[to+OFFSET_DIAG1] == BY_PAWN || b[to+OFFSET_DIAG2] == BY_PAWN)
+    return 1;
+  
+  //}}}
+  //{{{  knights
+  
+  if ((b[to + -10] == N) ||
+      (b[to + -23] == N) ||
+      (b[to + -14] == N) ||
+      (b[to + -25] == N) ||
+      (b[to +  10] == N) ||
+      (b[to +  23] == N) ||
+      (b[to +  14] == N) ||
+      (b[to +  25] == N)) return 1;
+  
+  //}}}
+  //{{{  queen, bishop, rook
+  
+  fr = to + 1;  while (!b[fr]) fr += 1;  if (RQ[b[fr]]) return 1;
+  fr = to - 1;  while (!b[fr]) fr -= 1;  if (RQ[b[fr]]) return 1;
+  fr = to + 12; while (!b[fr]) fr += 12; if (RQ[b[fr]]) return 1;
+  fr = to - 12; while (!b[fr]) fr -= 12; if (RQ[b[fr]]) return 1;
+  
+  fr = to + 11; while (!b[fr]) fr += 11; if (BQ[b[fr]]) return 1;
+  fr = to - 11; while (!b[fr]) fr -= 11; if (BQ[b[fr]]) return 1;
+  fr = to + 13; while (!b[fr]) fr += 13; if (BQ[b[fr]]) return 1;
+  fr = to - 13; while (!b[fr]) fr -= 13; if (BQ[b[fr]]) return 1;
+  
+  //}}}
+
+  return 0;
+}
+
+
+//}}}
+
+//}}}
+//{{{  tt
+
+#define TT_SIZE  (1 << 20)
+#define TT_MASK  ((TT_SIZE) - 1)
+#define TT_EXACT 0x01
+#define TT_ALPHA 0x02
+#define TT_BETA  0x04
+
+uint32 ttLo[TT_SIZE];
+uint32 ttHi[TT_SIZE];
+uint8  ttFlags[TT_SIZE];
+int16  ttScore[TT_SIZE];
+uint8  ttDepth[TT_SIZE];
+
+void ttInit () {
+  for (int i=0; i < TT_SIZE; i++)
+    ttFlags[i] = 0;
+}
+
+void ttPut (int flags, int depth, int score) {
+
+  const uint32 i = hLo & TT_MASK;
+
+  ttLo[i] = hLo;
+  ttHi[i] = hHi;
+
+  ttFlags[i] = (uint8)flags;
+  ttDepth[i] = (uint8)depth;
+  ttScore[i] = (int16)score;
+}
+
+uint32 ttIndex () {
+
+  const uint32 i = hLo & TT_MASK;
+
+  if (ttFlags[i] && ttLo[i] == hLo && ttHi[i] == hHi)
+    return i;
+  else
+    return 0;
+}
 
 //}}}
 //{{{  eval
@@ -613,7 +904,7 @@ int evaluate () {
 //}}}
 //{{{  flip
 
-int flip (sq) {
+int flip (int sq) {
   const int m = (143-sq)/12;
   return 12*m + sq%12;
 }
@@ -641,562 +932,46 @@ void evalInitOnce () {
 //}}}
 
 //}}}
-//{{{  uci
+//{{{  cache
 
-//{{{  uciTokens
+//{{{  cacheStruct
 
-int uciTokens(int n, char **tokens) {
+struct cacheStruct {
 
-  char *cmd = tokens[0];
+  int bRights;
+  int bEP;
 
-  if (!strcmp(cmd,"position") || !strcmp(cmd,"p")) {
-    char *cmd2 = tokens[1];
-    if (!strcmp(cmd2,"startpos") || !strcmp(cmd2,"s")) {
-      position("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR", "w", "KQkq", "-");
-    }
-  }
-
-  else if (!strcmp(cmd,"ucinewgame") || !strcmp(cmd,"u")) {
-    ;
-  }
-
-  else if (!strcmp(cmd,"uci")) {
-    printf("id name clozza 1\n");
-    printf("id author Colin Jenkins\n");
-    printf("uciok\n");
-  }
-
-  else if (!strcmp(cmd,"b")) {
-    printBoard();
-  }
-
-  else if (!strcmp(cmd,"e")) {
-    const int e = evaluate();
-    printf("%d\n",e);
-  }
-
-  else if (!strcmp(cmd,"q")) {
-    return 1;
-  }
-
-  else {
-    printf("?\n");
-  }
-
-  return 0;
-}
-
-//}}}
-//{{{  uciExec
-
-#define MAX_TOKENS 8192
-
-int uciExec (char *line) {
-
-  char *tokens[MAX_TOKENS];
-  char *token;
-
-  int num_tokens = 0;
-
-  token = strtok(line, " \t\n");
-
-  while (token != NULL && num_tokens < MAX_TOKENS) {
-
-    tokens[num_tokens++] = token;
-
-    token = strtok(NULL, " \r\t\n");
-  }
-
-  return uciTokens(num_tokens, tokens);
-}
+  uint32 hLo;
+  uint32 hHi;
+};
 
 //}}}
 
-//}}}
+struct cacheStruct cache[MAX_PLY];
 
-#define MAX_LINE_LENGTH 8192
+//{{{  cacheSave
 
-int main(int argc, char **argv) {
+void cacheSave () {
 
-  char chunk[MAX_LINE_LENGTH];
+  struct cacheStruct *c = &cache[bPly];
 
-  evalInitOnce();
-
-  //{{{  exec args
-  
-  for (int i=1; i < argc; i++) {
-    if (uciExec(argv[i]))
-      return 0;
-  }
-  
-  //}}}
-  //{{{  exec stdio
-  
-  while (fgets(chunk, sizeof(chunk), stdin) != NULL) {
-    if (uciExec(chunk))
-      return 0;
-  }
-  
-  //}}}
-
-  return 0;
-}
-
-//{{{  todo
-
-/*
-
-//{{{  misc
-
-const MATE = 32000;
-
-var mSilent = 0;
-
-//}}}
-//{{{  timing
-
-var tBestMove    = 0;
-var tDone        = 0;
-var tNodes       = 0;
-var tTargetDepth = 0;
-var tTargetNodes = 0;
-var tFinishTime  = 0;
-
-function areWeDone() {
-  return tBestMove && ((tFinishTime  && (Date.now() >  tFinishTime)) || (tTargetNodes && (tNodes >= tTargetNodes)));
+  c->bRights = bRights;
+  c->bEP     = bEP;
+  c->hLo     = hLo;
+  c->hHi     = hHi;
 }
 
 //}}}
-//{{{  board
+//{{{  cacheUnsave
 
-//{{{  constants
+void cacheUnsave () {
 
-const WHITE = 0x0;
-const BLACK = 0x8;
+  struct cacheStruct *c = &cache[bPly];
 
-//cstart
-#define WHITE 0x0
-#define BLACK 0x8
-//cend
-
-const PIECE_MASK  = 0x7;
-const COLOUR_MASK = 0x8;
-
-//cstart
-#define PIECE_MASK  0x7
-#define COLOUR_MASK 0x8
-//cend
-
-
-const PAWN   = 1;
-const KNIGHT = 2;
-const BISHOP = 3;
-const ROOK   = 4;
-const QUEEN  = 5;
-const KING   = 6;
-const EDGE   = 7;
-
-const W_PAWN   = PAWN;
-const W_KNIGHT = KNIGHT;
-const W_BISHOP = BISHOP;
-const W_ROOK   = ROOK;
-const W_QUEEN  = QUEEN;
-const W_KING   = KING;
-
-const B_PAWN   = PAWN   | BLACK;
-const B_KNIGHT = KNIGHT | BLACK;
-const B_BISHOP = BISHOP | BLACK;
-const B_ROOK   = ROOK   | BLACK;
-const B_QUEEN  = QUEEN  | BLACK;
-const B_KING   = KING   | BLACK;
-
-const ADJACENT = [1,1,0,0,0,0,0,0,0,0,0,1,1,1];
-
-//
-// E == EMPTY, X = OFF BOARD, - == CANNOT HAPPEN
-//
-//                  0  1  2  3  4  5  6  7  8  9  10 11 12 13 14 15
-//                  E  W  W  W  W  W  W  X  -  B  B  B  B  B  B  -
-//                  E  P  N  B  R  Q  K  X  -  P  N  B  R  Q  K  -
-//
-const IS_O       = [0, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 0];
-const IS_E       = [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-const IS_OE      = [1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 0];
-
-const IS_P       = [0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0];
-const IS_N       = [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0];
-const IS_NBRQ    = [0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0]
-const IS_NBRQKE  = [1, 0, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 0]
-const IS_RQKE    = [1, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 1, 1, 1, 0]
-const IS_Q       = [0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0]
-const IS_QKE     = [1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1, 0]
-const IS_K       = [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0];
-const IS_KN      = [0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0];
-const IS_SLIDER  = [0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0];
-
-const IS_W       = [0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-const IS_WE      = [1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-const IS_WP      = [0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-const IS_WN      = [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-const IS_WNBRQ   = [0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-const IS_WPNBRQ  = [0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-const IS_WPNBRQE = [1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-const IS_WB      = [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-const IS_WR      = [0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-const IS_WBQ     = [0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-const IS_WRQ     = [0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-const IS_WQ      = [0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-const IS_WK      = [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-
-const IS_B       = [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0];
-const IS_BE      = [1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0];
-const IS_BP      = [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0];
-const IS_BN      = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0];
-const IS_BNBRQ   = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0]
-const IS_BPNBRQ  = [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0]
-const IS_BPNBRQE = [1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0]
-const IS_BB      = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0];
-const IS_BR      = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0];
-const IS_BBQ     = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0];
-const IS_BRQ     = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0];
-const IS_BQ      = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0]
-const IS_BK      = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0]
-
-const OBJ_CHAR = ['.','P','N','B','R','Q','K','x','y','p','n','b','r','q','k','z'];
-
-const A1 = 110, B1 = 111, C1 = 112, D1 = 113, E1 = 114, F1 = 115, G1 = 116, H1 = 117;
-const           B2 = 99,  C2 = 100,                               G2 = 104, H2 = 105;
-const           B7 = 39,  C7 = 40,                                G7 = 44,  H7 = 45;
-const A8 = 26,  B8 = 27,  C8 = 28,  D8 = 29,  E8 = 30,  F8 = 31,  G8 = 32,  H8 = 33;
-
-const B88 = [26, 27, 28, 29, 30, 31, 32, 33,
-             38, 39, 40, 41, 42, 43, 44, 45,
-             50, 51, 52, 53, 54, 55, 56, 57,
-             62, 63, 64, 65, 66, 67, 68, 69,
-             74, 75, 76, 77, 78, 79, 80, 81,
-             86, 87, 88, 89, 90, 91, 92, 93,
-             98, 99, 100,101,102,103,104,105,
-             110,111,112,113,114,115,116,117];
-
-const COORDS = ['??', '??', '??', '??', '??', '??', '??', '??', '??', '??', '??', '??',
-                '??', '??', '??', '??', '??', '??', '??', '??', '??', '??', '??', '??',
-                '??', '??', 'a8', 'b8', 'c8', 'd8', 'e8', 'f8', 'g8', 'h8', '??', '??',
-                '??', '??', 'a7', 'b7', 'c7', 'd7', 'e7', 'f7', 'g7', 'h7', '??', '??',
-                '??', '??', 'a6', 'b6', 'c6', 'd6', 'e6', 'f6', 'g6', 'h6', '??', '??',
-                '??', '??', 'a5', 'b5', 'c5', 'd5', 'e5', 'f5', 'g5', 'h5', '??', '??',
-                '??', '??', 'a4', 'b4', 'c4', 'd4', 'e4', 'f4', 'g4', 'h4', '??', '??',
-                '??', '??', 'a3', 'b3', 'c3', 'd3', 'e3', 'f3', 'g3', 'h3', '??', '??',
-                '??', '??', 'a2', 'b2', 'c2', 'd2', 'e2', 'f2', 'g2', 'h2', '??', '??',
-                '??', '??', 'a1', 'b1', 'c1', 'd1', 'e1', 'f1', 'g1', 'h1', '??', '??',
-                '??', '??', '??', '??', '??', '??', '??', '??', '??', '??', '??', '??',
-                '??', '??', '??', '??', '??', '??', '??', '??', '??', '??', '??', '??'];
-
-const RANK = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-              0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-              0, 0, 8, 8, 8, 8, 8, 8, 8, 8, 0, 0,
-              0, 0, 7, 7, 7, 7, 7, 7, 7, 7, 0, 0,
-              0, 0, 6, 6, 6, 6, 6, 6, 6, 6, 0, 0,
-              0, 0, 5, 5, 5, 5, 5, 5, 5, 5, 0, 0,
-              0, 0, 4, 4, 4, 4, 4, 4, 4, 4, 0, 0,
-              0, 0, 3, 3, 3, 3, 3, 3, 3, 3, 0, 0,
-              0, 0, 2, 2, 2, 2, 2, 2, 2, 2, 0, 0,
-              0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0,
-              0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-              0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-
-const FILE = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-              0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-              0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 0,
-              0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 0,
-              0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 0,
-              0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 0,
-              0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 0,
-              0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 0,
-              0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 0,
-              0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 0,
-              0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-              0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-
-const CENTRE = [0, 0, 0, 0,  0,  0,  0,  0,  0,  0, 0, 0,
-                0, 0, 0, 0,  0,  0,  0,  0,  0,  0, 0, 0,
-                0, 0, 1, 2,  3,  4,  4,  3,  2,  1, 0, 0,
-                0, 0, 2, 6,  8,  10, 10, 8,  6,  2, 0, 0,
-                0, 0, 3, 8,  15, 18, 18, 15, 8,  3, 0, 0,
-                0, 0, 4, 10, 18, 28, 28, 18, 10, 4, 0, 0,
-                0, 0, 4, 10, 18, 28, 28, 19, 10, 4, 0, 0,
-                0, 0, 3, 8,  15, 18, 18, 15, 8,  3, 0, 0,
-                0, 0, 2, 6,  8,  10, 10, 8,  6,  2, 0, 0,
-                0, 0, 1, 2,  3,  4,  4,  3,  2,  1, 0, 0,
-                0, 0, 0, 0,  0,  0,  0,  0,  0,  0, 0, 0,
-                0, 0, 0, 0,  0,  0,  0,  0,  0,  0, 0, 0];
-
-//}}}
-
-const bBoard  = Array(144);
-var   bTurn   = 0;
-var   bRights = 0;
-var   bEP     = 0;
-var   bPly    = 0;
-const bKings  = [0,0];
-
-//{{{  board primitives
-
-function objColour (obj) {
-  return obj & COLOUR_MASK;
-}
-
-function objPiece (obj) {
-  return obj & PIECE_MASK;
-}
-
-function colourIndex (c) {
-  return c >>> 3;
-}
-
-function colourtoggleIndex (i) {
-  return Math.abs(i-1);
-}
-
-function colourMultiplier (c) {
-  return (-c >> 31) | 1;
-}
-
-function colourToggle (c) {
-  return ~c & COLOUR_MASK;
-}
-
-//}}}
-//{{{  printBoard
-
-function printBoard () {
-
-  const b = bBoard;
-
-  for (var rank=7; rank >= 0; rank--) {
-    process.stdout.write((rank+1)+' ');
-    for (var file=0; file <= 7; file++) {
-      process.stdout.write(OBJ_CHAR[b[B88[(7-rank)*8+file]]] + ' ');
-    }
-    process.stdout.write('\r\n');
-  }
-
-  console.log('  a b c d e f g h');
-
-  if (bTurn == WHITE)
-    process.stdout.write('w');
-  else
-    process.stdout.write('b');
-  process.stdout.write(' ');
-
-  if (bRights) {
-    if (bRights & WHITE_RIGHTS_KING)
-      process.stdout.write('K');
-   if (bRights & WHITE_RIGHTS_QUEEN)
-      process.stdout.write('Q');
-   if (bRights & BLACK_RIGHTS_KING)
-      process.stdout.write('k');
-   if (bRights & BLACK_RIGHTS_QUEEN)
-      process.stdout.write('q');
-    process.stdout.write(' ');
-  }
-  else
-    process.stdout.write('- ');
-
-  if (bEP)
-    process.stdout.write(COORDS[bEP]);
-  else
-    process.stdout.write('-');
-
-  console.log();
-  console.log('hash',hLo[0],hHi[0]);
-}
-
-//}}}
-
-//}}}
-//{{{  eval
-
-//{{{  constants
-
-const MATERIAL = [100,320,330,500,900,20000];
-
-const WPAWN_PST = [0, 0, 0,  0,  0,   0,   0,   0,   0,  0,  0, 0,
-                   0, 0, 0,  0,  0,   0,   0,   0,   0,  0,  0, 0,
-                   0, 0, 0,  0,  0,   0,   0,   0,   0,  0,  0, 0,
-                   0, 0, 50, 50, 50,  50,  50,  50,  50, 50, 0, 0,
-                   0, 0, 10, 10, 20,  30,  30,  20,  10, 10, 0, 0,
-                   0, 0, 5,  5,  10,  25,  25,  10,  5,  5,  0, 0,
-                   0, 0, 0,  0,  0,   20,  20,  0,   0,  0,  0, 0,
-                   0, 0, 5,  -5, -10, 0,   0,   -10, -5, 5,  0, 0,
-                   0, 0, 5,  10, 10,  -20, -20, 10,  10, 5,  0, 0,
-                   0, 0, 0,  0,  0,   0,   0,   0,   0,  0,  0, 0,
-                   0, 0, 0,  0,  0,   0,   0,   0,   0,  0,  0, 0,
-                   0, 0, 0,  0,  0,   0,   0,   0,   0,  0,  0, 0];
-
-const WKNIGHT_PST = [0, 0, 0,   0,   0,   0,   0,   0,   0,   0,   0, 0,
-                     0, 0, 0,   0,   0,   0,   0,   0,   0,   0,   0, 0,
-                     0, 0, -50, -40, -30, -30, -30, -30, -40, -50, 0, 0,
-                     0, 0, -40, -20, 0,   0,   0,   0,   -20, -40, 0, 0,
-                     0, 0, -30, 0,   10,  15,  15,  10,   0,  -30, 0, 0,
-                     0, 0, -30, 5,   15,  20,  20,  15,   5,  -30, 0, 0,
-                     0, 0, -30, 0,   15,  20,  20,  15,   0,  -30, 0, 0,
-                     0, 0, -30, 5,   10,  15,  15,  10,   5,  -30, 0, 0,
-                     0, 0, -40, -20, 0,   5,   5,   0,   -20, -40, 0, 0,
-                     0, 0, -50, -40, -30, -30, -30, -30, -40, -50, 0, 0,
-                     0, 0, 0,   0,   0,   0,   0,   0,   0,   0,   0, 0,
-                     0, 0, 0,   0,   0,   0,   0,   0,   0,   0,   0, 0];
-
-const WBISHOP_PST = [0, 0, 0,   0,   0,   0,   0,   0,   0,   0,   0, 0,
-                     0, 0, 0,   0,   0,   0,   0,   0,   0,   0,   0, 0,
-                     0, 0, -20, -10, -10, -10, -10, -10, -10, -20, 0, 0,
-                     0, 0, -10, 0,   0,   0,   0,   0,    0,  -10, 0, 0,
-                     0, 0, -10, 0,   5,   10,  10,  5,    0,  -10, 0, 0,
-                     0, 0, -10, 5,   5,   10,  10,  5,    5,  -10, 0, 0,
-                     0, 0, -10, 0,   10,  10,  10,  10,   0,  -10, 0, 0,
-                     0, 0, -10, 10,  10,  10,  10,  10,   10, -10, 0, 0,
-                     0, 0, -10, 5 ,   0,   0,   0,   0,   5,  -10, 0, 0,
-                     0, 0, -20, -10, -10, -10, -10, -10, -10, -20, 0, 0,
-                     0, 0, 0,   0,   0,   0,   0,   0,   0,   0,   0, 0,
-                     0, 0, 0,   0,   0,   0,   0,   0,   0,   0,   0, 0];
-
-const WROOK_PST = [0, 0, 0,   0,   0,   0,   0,   0,   0,   0,  0, 0,
-                   0, 0, 0,   0,   0,   0,   0,   0,   0,   0,  0, 0,
-                   0, 0, 0,   0,   0,   0,   0,   0,   0,   0,  0, 0,
-                   0, 0, 5,   10,  10,  10,  10,  10,  10,  5,  0, 0,
-                   0, 0, -5,  0,   0,   0,   0,   0,   0,   -5, 0, 0,
-                   0, 0, -5,  0,   0,   0,   0,   0,   0,   -5, 0, 0,
-                   0, 0, -5,  0,   0,   0,   0,   0,   0,   -5, 0, 0,
-                   0, 0, -5,  0,   0,   0,   0,   0,   0,   -5, 0, 0,
-                   0, 0, -5,  0,   0,   0,   0,   0,   0,   -5, 0, 0,
-                   0, 0, 0,   0,   0,   5,   5,   0,   0,   0,  0, 0,
-                   0, 0, 0,   0,   0,   0,   0,   0,   0,   0,  0, 0,
-                   0, 0, 0,   0,   0,   0,   0,   0,   0,   0,  0, 0];
-
-const WQUEEN_PST = [0, 0, 0,   0,   0,   0,   0,   0,   0,   0,   0, 0,
-                    0, 0, 0,   0,   0,   0,   0,   0,   0,   0,   0, 0,
-                    0, 0, -20, -10, -10, -5,  -5,  -10, -10, -20, 0, 0,
-                    0, 0, -10, 0,   0,   0,   0,   0,    0,  -10, 0, 0,
-                    0, 0, -10, 0,   5,   5,   5,   5,    0,  -10, 0, 0,
-                    0, 0, -5,  0,   5,   5,   5,   5,    0,  -5,  0, 0,
-                    0, 0,  0,  0,   5,   5,   5,   5,    0,  -5,  0, 0,
-                    0, 0, -10, 5,   5,   5,   5,   5,    0,  -10, 0, 0,
-                    0, 0, -10, 0,   5,   0,   0,   0,    0,  -10, 0, 0,
-                    0, 0, -20, -10, -10, -5,  -5,  -10, -10, -20, 0, 0,
-                    0, 0, 0,   0,   0,   0,   0,   0,   0,   0,   0, 0,
-                    0, 0, 0,   0,   0,   0,   0,   0,   0,   0,   0, 0];
-
-const WKING_MID_PST = [0, 0, 0,   0,   0,   0,   0,   0,   0,   0,   0, 0,
-                       0, 0, 0,   0,   0,   0,   0,   0,   0,   0,   0, 0,
-                       0, 0, -30, -40, -40, -50, -50, -40, -40, -30, 0, 0,
-                       0, 0, -30, -40, -40, -50, -50, -40, -40, -30, 0, 0,
-                       0, 0, -30, -40, -40, -50, -50, -40, -40, -30, 0, 0,
-                       0, 0, -30, -40, -40, -50, -50, -40, -40, -30, 0, 0,
-                       0, 0, -20, -30, -30, -40, -40, -30, -30, -20, 0, 0,
-                       0, 0, -10, -20, -20, -20, -20, -20, -20, -10, 0, 0,
-                       0, 0, 20,  20,  0,   0,   0,   0,   20,  20,  0, 0,
-                       0, 0, 20,  30,  10,  0,   0,   10,  30,  20,  0, 0,
-                       0, 0, 0,   0,   0,   0,   0,   0,   0,   0,   0, 0,
-                       0, 0, 0,   0,   0,   0,   0,   0,   0,   0,   0, 0];
-
-const WKING_END_PST = [0, 0, 0,   0,   0,   0,   0,   0,   0,   0,  0, 0,
-                       0, 0, 0,   0,   0,   0,   0,   0,   0,   0,  0, 0,
-                       0, 0, -50, -40, -30, -20, -20, -30, -40, -50,0, 0,
-                       0, 0, -30, -20, -10, 0,   0,   -10, -20, -30,0, 0,
-                       0, 0, -30, -10, 20,  30,  30,  20,  -10, -30,0, 0,
-                       0, 0, -30, -10, 30,  40,  40,  30,  -10, -30,0, 0,
-                       0, 0, -30, -10, 30,  40,  40,  30,  -10, -30,0, 0,
-                       0, 0, -30, -10, 20,  30,  30,  20,  -10, -30,0, 0,
-                       0, 0, -30, -30, 0,   0,   0,   0,   -30, -30,0, 0,
-                       0, 0, -50, -30, -30, -30, -30, -30, -30, -50,0, 0,
-                       0, 0, 0,   0,   0,   0,   0,   0,   0,   0,  0, 0,
-                       0, 0, 0,   0,   0,   0,   0,   0,   0,   0,  0, 0];
-
-const BPAWN_PST     = Array(144);
-const BKNIGHT_PST   = Array(144);
-const BBISHOP_PST   = Array(144);
-const BROOK_PST     = Array(144);
-const BQUEEN_PST    = Array(144);
-const BKING_MID_PST = Array(144);
-const BKING_END_PST = Array(144);
-
-const WHITE_MID_PST = [WPAWN_PST, WKNIGHT_PST, WBISHOP_PST, WROOK_PST, WQUEEN_PST, WKING_MID_PST];
-const WHITE_END_PST = [WPAWN_PST, WKNIGHT_PST, WBISHOP_PST, WROOK_PST, WQUEEN_PST, WKING_END_PST];
-const BLACK_MID_PST = [BPAWN_PST, BKNIGHT_PST, BBISHOP_PST, BROOK_PST, BQUEEN_PST, BKING_MID_PST];
-const BLACK_END_PST = [BPAWN_PST, BKNIGHT_PST, BBISHOP_PST, BROOK_PST, BQUEEN_PST, BKING_END_PST];
-
-const WB_MID_PST = [WHITE_MID_PST, BLACK_MID_PST];
-const WB_END_PST = [WHITE_END_PST, BLACK_END_PST];
-
-//}}}
-
-//{{{  evaluate
-
-function evaluate () {
-
-  const b = bBoard;
-
-  const cx = colourMultiplier(bTurn)
-
-  var e = 10 * cx;
-
-  var pst_mid = 0;
-  var pst_end = 0;
-
-  var q = 0;
-
-  for (let sq=0; sq<64; sq++) {
-
-    const fr    = B88[sq];
-    const frObj = b[fr];
-
-    if (!frObj)
-      continue;
-
-    const frPiece  = objPiece(frObj) - 1;
-    const frColour = objColour(frObj);
-    const frIndex  = colourIndex(frColour);
-    const frMult   = colourMultiplier(frColour);
-
-    e += MATERIAL[frPiece] * frMult;
-
-    pst_mid += WB_MID_PST[frIndex][frPiece][fr] * frMult;
-    pst_end += WB_END_PST[frIndex][frPiece][fr] * frMult;
-
-    q += IS_Q[frObj];
-  }
-
-  if (q)
-    return (e + pst_mid) * cx;
-  else
-    return (e + pst_end) * cx;
-}
-
-//}}}
-//{{{  flip
-
-function flip (sq) {
-  var m = (143-sq)/12|0;
-  return 12*m + sq%12;
-}
-
-//}}}
-//{{{  evalInitOnce
-
-function evalInitOnce () {
-
-  for (let i=0; i < 144; i++) {
-
-    let j = flip(i);
-
-    BPAWN_PST[j]     = WPAWN_PST[i];
-    BKNIGHT_PST[j]   = WKNIGHT_PST[i];
-    BBISHOP_PST[j]   = WBISHOP_PST[i];
-    BROOK_PST[j]     = WROOK_PST[i];
-    BQUEEN_PST[j]    = WQUEEN_PST[i];
-    BKING_MID_PST[j] = WKING_MID_PST[i];
-    BKING_END_PST[j] = WKING_END_PST[i];
-  }
-
+  bRights = c->bRights;
+  bEP     = c->bEP;
+  hLo     = c->hLo;
+  hHi     = c->hHi;
 }
 
 //}}}
@@ -1206,131 +981,94 @@ function evalInitOnce () {
 
 //{{{  constants
 
-const MAX_PLY   = 100;
-const MAX_MOVES = 250;
+#define MAX_MOVES 250
 
-const ALL_MOVES   = 0
-const NOISY_MOVES = 1
+#define ALL_MOVES   0
+#define NOISY_MOVES 1
 
-const MOVE_TO_BITS      = 0;
-const MOVE_FR_BITS      = 8;
-const MOVE_TOOBJ_BITS   = 16;
-const MOVE_FROBJ_BITS   = 20;
-const MOVE_PROMAS_BITS  = 29;
+#define MOVE_TO_BITS      0
+#define MOVE_FR_BITS      8
+#define MOVE_TOOBJ_BITS   16
+#define MOVE_FROBJ_BITS   20
+#define MOVE_PROMAS_BITS  29
 
-const MOVE_TO_MASK       = 0x000000FF;
-const MOVE_FR_MASK       = 0x0000FF00;
-const MOVE_TOOBJ_MASK    = 0x000F0000;
-const MOVE_FROBJ_MASK    = 0x00F00000;
-const MOVE_KINGMOVE_MASK = 0x01000000;
-const MOVE_EPTAKE_MASK   = 0x02000000;
-const MOVE_EPMAKE_MASK   = 0x04000000;
-const MOVE_CASTLE_MASK   = 0x08000000;
-const MOVE_PROMOTE_MASK  = 0x10000000;
-const MOVE_PROMAS_MASK   = 0x60000000;  // NBRQ.
-const MOVE_SPARE_MASK    = 0x80000000;
+#define MOVE_TO_MASK       0x000000FF
+#define MOVE_FR_MASK       0x0000FF00
+#define MOVE_TOOBJ_MASK    0x000F0000
+#define MOVE_FROBJ_MASK    0x00F00000
+#define MOVE_KINGMOVE_MASK 0x01000000
+#define MOVE_EPTAKE_MASK   0x02000000
+#define MOVE_EPMAKE_MASK   0x04000000
+#define MOVE_CASTLE_MASK   0x08000000
+#define MOVE_PROMOTE_MASK  0x10000000
+#define MOVE_PROMAS_MASK   0x60000000
+#define MOVE_SPARE_MASK    0x80000000
 
-const MOVE_CAPTURE_MASK = MOVE_TOOBJ_MASK | MOVE_EPTAKE_MASK;
-const MOVE_IKKY_MASK    = MOVE_KINGMOVE_MASK | MOVE_CASTLE_MASK | MOVE_PROMOTE_MASK | MOVE_EPTAKE_MASK | MOVE_EPMAKE_MASK;
+#define MOVE_CAPTURE_MASK (MOVE_TOOBJ_MASK | MOVE_EPTAKE_MASK)
+#define MOVE_IKKY_MASK    (MOVE_KINGMOVE_MASK | MOVE_CASTLE_MASK | MOVE_PROMOTE_MASK | MOVE_EPTAKE_MASK | MOVE_EPMAKE_MASK)
 
-const MOVE_E1G1 = MOVE_KINGMOVE_MASK | MOVE_CASTLE_MASK | (W_KING << MOVE_FROBJ_BITS) | (E1 << MOVE_FR_BITS) | G1;
-const MOVE_E1C1 = MOVE_KINGMOVE_MASK | MOVE_CASTLE_MASK | (W_KING << MOVE_FROBJ_BITS) | (E1 << MOVE_FR_BITS) | C1;
-const MOVE_E8G8 = MOVE_KINGMOVE_MASK | MOVE_CASTLE_MASK | (B_KING << MOVE_FROBJ_BITS) | (E8 << MOVE_FR_BITS) | G8;
-const MOVE_E8C8 = MOVE_KINGMOVE_MASK | MOVE_CASTLE_MASK | (B_KING << MOVE_FROBJ_BITS) | (E8 << MOVE_FR_BITS) | C8;
+#define MOVE_E1G1 (MOVE_KINGMOVE_MASK | MOVE_CASTLE_MASK | (W_KING << MOVE_FROBJ_BITS) | (E1 << MOVE_FR_BITS) | G1)
+#define MOVE_E1C1 (MOVE_KINGMOVE_MASK | MOVE_CASTLE_MASK | (W_KING << MOVE_FROBJ_BITS) | (E1 << MOVE_FR_BITS) | C1)
+#define MOVE_E8G8 (MOVE_KINGMOVE_MASK | MOVE_CASTLE_MASK | (B_KING << MOVE_FROBJ_BITS) | (E8 << MOVE_FR_BITS) | G8)
+#define MOVE_E8C8 (MOVE_KINGMOVE_MASK | MOVE_CASTLE_MASK | (B_KING << MOVE_FROBJ_BITS) | (E8 << MOVE_FR_BITS) | C8)
 
-const QPRO = (QUEEN-2)  << MOVE_PROMAS_BITS | MOVE_PROMOTE_MASK;
-const RPRO = (ROOK-2)   << MOVE_PROMAS_BITS | MOVE_PROMOTE_MASK;
-const BPRO = (BISHOP-2) << MOVE_PROMAS_BITS | MOVE_PROMOTE_MASK;
-const NPRO = (KNIGHT-2) << MOVE_PROMAS_BITS | MOVE_PROMOTE_MASK;
-
-const W_OFFSET_ORTH  = -12;
-const W_OFFSET_DIAG1 = -13;
-const W_OFFSET_DIAG2 = -11;
-
-const B_OFFSET_ORTH  = 12;
-const B_OFFSET_DIAG1 = 13;
-const B_OFFSET_DIAG2 = 11;
-
-const KNIGHT_OFFSETS  = [25,-25,23,-23,14,-14,10,-10];
-const BISHOP_OFFSETS  = [11,-11,13,-13];
-const ROOK_OFFSETS    = [1,-1,12,-12];
-const QUEEN_OFFSETS   = [11,-11,13,-13,1,-1,12,-12];
-const KING_OFFSETS    = [11,-11,13,-13,1,-1,12,-12];
-
-const SLIDER_OFFSETS = [0, 0, 0, BISHOP_OFFSETS, ROOK_OFFSETS, QUEEN_OFFSETS];
-
-const WB_CAN_CAPTURE  = [IS_BPNBRQ,      IS_WPNBRQ];
-const WB_OUR_PIECE    = [IS_W,           IS_B];
-const WB_OFFSET_ORTH  = [W_OFFSET_ORTH,  B_OFFSET_ORTH];
-const WB_OFFSET_DIAG1 = [W_OFFSET_DIAG1, B_OFFSET_DIAG1];
-const WB_OFFSET_DIAG2 = [W_OFFSET_DIAG2, B_OFFSET_DIAG2];
-const WB_HOME_RANK    = [2,              7];
-const WB_PROMOTE_RANK = [7,              2];
-const WB_EP_RANK      = [5,              4];
-const WB_RQ           = [IS_WRQ,         IS_BRQ];
-const WB_BQ           = [IS_WBQ,         IS_BBQ];
-const WB_PAWN         = [W_PAWN,         B_PAWN];
+#define QPRO (((QUEEN-2)  << MOVE_PROMAS_BITS) | MOVE_PROMOTE_MASK)
+#define RPRO (((ROOK-2)   << MOVE_PROMAS_BITS) | MOVE_PROMOTE_MASK)
+#define BPRO (((BISHOP-2) << MOVE_PROMAS_BITS) | MOVE_PROMOTE_MASK)
+#define NPRO (((KNIGHT-2) << MOVE_PROMAS_BITS) | MOVE_PROMOTE_MASK)
 
 //}}}
 
 //{{{  movelistStruct
 
-function movelistStruct () {
+struct movelistStruct {
 
-  this.quietMoves  = Array(MAX_MOVES);
-  this.noisyMoves  = Array(MAX_MOVES);
-  this.quietRanks  = Array(MAX_MOVES);
-  this.noisyRanks  = Array(MAX_MOVES);
-  this.quietNum    = 0;
-  this.noisyNum    = 0;
-  this.nextMove    = 0;
-  this.noisy       = 0;
-  this.stage       = 0;
-}
+  move_t quietMoves[MAX_MOVES];
+  move_t noisyMoves[MAX_MOVES];
+
+  int quietRanks[MAX_MOVES];
+  int noisyRanks[MAX_MOVES];
+
+  int quietNum;
+  int noisyNum;
+  int nextMove;
+  int noisy;
+  int stage;
+};
 
 //}}}
 
-const movelist = Array(MAX_PLY);
+struct movelistStruct movelist[MAX_PLY];
 
 //{{{  move primitives
 
-function moveFromSq (move) {
-  return (move & MOVE_FR_MASK) >>> MOVE_FR_BITS;
+int moveFromSq (move_t move) {
+  return (int)((move & MOVE_FR_MASK) >> MOVE_FR_BITS);
 }
 
-function moveToSq (move) {
-  return (move & MOVE_TO_MASK) >>> MOVE_TO_BITS;
+int moveToSq (move_t move) {
+  return (int)((move & MOVE_TO_MASK) >> MOVE_TO_BITS);
 }
 
-function moveToObj (move) {
-  return (move & MOVE_TOOBJ_MASK) >>> MOVE_TOOBJ_BITS;
+int moveToObj (move_t move) {
+  return (int)((move & MOVE_TOOBJ_MASK) >> MOVE_TOOBJ_BITS);
 }
 
-function moveFromObj (move) {
-  return (move & MOVE_FROBJ_MASK) >>> MOVE_FROBJ_BITS;
+int moveFromObj (move_t move) {
+  return (int)((move & MOVE_FROBJ_MASK) >> MOVE_FROBJ_BITS);
 }
 
-function movePromotePiece (move) {
-  return ((move & MOVE_PROMAS_MASK) >>> MOVE_PROMAS_BITS) + 2;
-}
-
-//}}}
-
-//{{{  movelistInitOnce
-
-function movelistInitOnce() {
-
-  for (let i=0; i < movelist.length; i++)
-    movelist[i] = new movelistStruct();
+int movePromotePiece (move_t move) {
+  return (int)(((move & MOVE_PROMAS_MASK) >> MOVE_PROMAS_BITS) + 2);
 }
 
 //}}}
 
 //{{{  initMoveGen
 
-function initMoveGen (noisy) {
+void initMoveGen (int noisy) {
 
-  const ml = movelist[bPly];
+  struct movelistStruct ml = movelist[bPly];
 
   ml.stage = 0;
   ml.noisy = noisy;
@@ -1338,65 +1076,18 @@ function initMoveGen (noisy) {
 }
 
 //}}}
-//{{{  getNextMove
+//{{{  addQuiet
 
-function getNextMove () {
+void addQuiet (move_t move) {
 
-  const ml = movelist[bPly];
+  assert(move);
 
-  switch (ml.stage) {
+  struct movelistStruct *ml = &movelist[bPly];
 
-    case 0:
+  ml->quietMoves[ml->quietNum] = move;
+  ml->quietRanks[ml->quietNum] = 100 + CENTRE[moveToSq(move)] - CENTRE[moveFromSq(move)];
 
-      ml.noisyNum = 0;
-      ml.quietNum = 0;
-
-      genMoves();
-
-      ml.nextMove = 0;
-      ml.stage++;
-
-    case 1:
-
-      if (ml.nextMove < ml.noisyNum)
-        return nextStagedMove(ml.nextMove++, ml.noisyNum, ml.noisyMoves, ml.noisyRanks);
-
-      if (ml.noisy)
-        return 0;
-
-      ml.nextMove = 0;
-      ml.stage++;
-
-    case 2:
-
-      if (ml.nextMove < ml.quietNum)
-        return nextStagedMove(ml.nextMove++, ml.quietNum, ml.quietMoves, ml.quietRanks);
-
-      return 0;
-  }
-}
-
-//}}}
-//{{{  nextStagedMove
-
-function nextStagedMove (next, num, moves, ranks) {
-
-  var maxR = -100000;
-  var maxI = 0;
-
-  for (let i=next; i < num; i++) {
-    if (ranks[i] > maxR) {
-      maxR = ranks[i];
-      maxI = i;
-    }
-  }
-
-  const maxM = moves[maxI]
-
-  moves[maxI] = moves[next];
-  ranks[maxI] = ranks[next];
-
-  return maxM;
+  ml->quietNum = ml->quietNum + 1;
 }
 
 //}}}
@@ -1405,103 +1096,25 @@ function nextStagedMove (next, num, moves, ranks) {
 // Must handle EP captures.
 //
 
-const RANK_ATTACKER = [0,    600,  500,  400,  300,  200,  100, 0, 0,    600,  500,  400,  300,  200,  100];
-const RANK_DEFENDER = [2000, 1000, 3000, 3000, 5000, 9000, 0,   0, 2000, 1000, 3000, 3000, 5000, 9000, 0];
+const int RANK_ATTACKER[] = {0,    600,  500,  400,  300,  200,  100, 0, 0,    600,  500,  400,  300,  200,  100};
+const int RANK_DEFENDER[] = {2000, 1000, 3000, 3000, 5000, 9000, 0,   0, 2000, 1000, 3000, 3000, 5000, 9000, 0};
 
-function addNoisy (move) {
+void addNoisy (move_t move) {
 
-  const ml = movelist[bPly];
+  struct movelistStruct *ml = &movelist[bPly];
 
-  ml.noisyMoves[ml.noisyNum]   = move;
-  ml.noisyRanks[ml.noisyNum++] = RANK_ATTACKER[moveFromObj(move)] + RANK_DEFENDER[moveToObj(move)];
+  ml->noisyMoves[ml->noisyNum] = move;
+  ml->noisyRanks[ml->noisyNum] = RANK_ATTACKER[moveFromObj(move)] + RANK_DEFENDER[moveToObj(move)];
 
+  ml->noisyNum = ml->noisyNum + 1;
 }
 
 //}}}
-//{{{  addQuiet
-
-function addQuiet (move) {
-
-  const ml = movelist[bPly];
-
-  ml.quietMoves[ml.quietNum]   = move;
-  ml.quietRanks[ml.quietNum++] = 100 + CENTRE[moveToSq(move)] - CENTRE[moveFromSq(move)];
-}
-
-//}}}
-
-//{{{  genMoves
-
-function genMoves () {
-
-  const b = bBoard;
-
-  const cx           = colourIndex(bTurn);
-  const OUR_PIECE    = WB_OUR_PIECE[cx];
-  const HOME_RANK    = WB_HOME_RANK[cx];
-  const PROMOTE_RANK = WB_PROMOTE_RANK[cx];
-  const EP_RANK      = WB_EP_RANK[cx];
-
-  if (bTurn == WHITE)
-    genWhiteCastlingMoves();
-  else
-    genBlackCastlingMoves();
-
-  for (let i=0; i<64; i++) {
-
-    const fr    = B88[i];
-    const frObj = b[fr];
-
-    if (!OUR_PIECE[frObj])
-      continue;
-
-    const frPiece   = objPiece(frObj);
-    const frMove    = (frObj << MOVE_FROBJ_BITS) | (fr << MOVE_FR_BITS);
-
-    switch (frPiece) {
-
-      case KING:
-        genKingMoves(frMove);
-        break;
-
-      case PAWN:
-        const frRank = RANK[fr];
-        switch (frRank) {
-          case HOME_RANK:
-            genHomePawnMoves(frMove);
-            break;
-          case PROMOTE_RANK:
-            genPromotePawnMoves(frMove);
-            break;
-          case EP_RANK:
-            genPawnMoves(frMove);
-            if (bEP)
-              genEnPassPawnMoves(frMove);
-            break;
-          default:
-            genPawnMoves(frMove);
-            break;
-        }
-        break;
-
-      case KNIGHT:
-        genKnightMoves(frMove);
-        break;
-
-      default:
-        genSliderMoves(frMove);
-        break;
-    }
-  }
-}
-
-//}}}
-
 //{{{  genWhiteCastlingMoves
 
-function genWhiteCastlingMoves () {
+void genWhiteCastlingMoves () {
 
-  const b = bBoard;
+  int *b = bBoard;
 
   if ((bRights & WHITE_RIGHTS_KING)  && !b[F1]
                                      && !b[G1]
@@ -1526,9 +1139,9 @@ function genWhiteCastlingMoves () {
 //}}}
 //{{{  genBlackCastlingMoves
 
-function genBlackCastlingMoves () {
+void genBlackCastlingMoves () {
 
-  const b = bBoard;
+  int *b = bBoard;
 
   if ((bRights & BLACK_RIGHTS_KING)  && b[F8] == 0
                                      && b[G8] == 0
@@ -1551,31 +1164,32 @@ function genBlackCastlingMoves () {
 }
 
 //}}}
-
 //{{{  genPawnMoves
 
-function genPawnMoves (frMove) {
+void genPawnMoves (move_t frMove) {
 
-  const b = bBoard;
+  int *b = bBoard;
 
-  const fr           = moveFromSq(frMove);
-  const cx           = colourIndex(bTurn);
-  const CAN_CAPTURE  = WB_CAN_CAPTURE[cx];
-  const OFFSET_ORTH  = WB_OFFSET_ORTH[cx];
-  const OFFSET_DIAG1 = WB_OFFSET_DIAG1[cx];
-  const OFFSET_DIAG2 = WB_OFFSET_DIAG2[cx];
+  const int fr           = moveFromSq(frMove);
+  const int cx           = colourIndex(bTurn);
+  const int *CAN_CAPTURE = WB_CAN_CAPTURE[cx];
+  const int OFFSET_ORTH  = WB_OFFSET_ORTH[cx];
+  const int OFFSET_DIAG1 = WB_OFFSET_DIAG1[cx];
+  const int OFFSET_DIAG2 = WB_OFFSET_DIAG2[cx];
 
-  var to = fr + OFFSET_ORTH;
+  int to, toObj;
+
+  to = fr + OFFSET_ORTH;
   if (!b[to])
     addQuiet(frMove | to);
 
-  var to = fr + OFFSET_DIAG1;
-  var toObj = b[to];
+  to    = fr + OFFSET_DIAG1;
+  toObj = b[to];
   if (CAN_CAPTURE[toObj])
     addNoisy(frMove | (toObj << MOVE_TOOBJ_BITS) | to);
 
-  var to = fr + OFFSET_DIAG2;
-  var toObj = b[to];
+  to = fr + OFFSET_DIAG2;
+  toObj = b[to];
   if (CAN_CAPTURE[toObj])
     addNoisy(frMove | (toObj << MOVE_TOOBJ_BITS) | to);
 }
@@ -1583,20 +1197,22 @@ function genPawnMoves (frMove) {
 //}}}
 //{{{  genEnPassPawnMoves
 
-function genEnPassPawnMoves (frMove) {
+void genEnPassPawnMoves (move_t frMove) {
 
-  const b = bBoard;
+  int *b = bBoard;
 
-  const fr           = moveFromSq(frMove);
-  const cx           = colourIndex(bTurn);
-  const OFFSET_DIAG1 = WB_OFFSET_DIAG1[cx];
-  const OFFSET_DIAG2 = WB_OFFSET_DIAG2[cx];
+  const int fr           = moveFromSq(frMove);
+  const int cx           = colourIndex(bTurn);
+  const int OFFSET_DIAG1 = WB_OFFSET_DIAG1[cx];
+  const int OFFSET_DIAG2 = WB_OFFSET_DIAG2[cx];
 
-  var to = fr + OFFSET_DIAG1;
+  int to;
+
+  to = fr + OFFSET_DIAG1;
   if (to == bEP && !b[to])
     addNoisy(frMove | to | MOVE_EPTAKE_MASK);
 
-  var to = fr + OFFSET_DIAG2;
+  to = fr + OFFSET_DIAG2;
   if (to == bEP && !b[to])
     addNoisy(frMove | to | MOVE_EPTAKE_MASK);
 }
@@ -1604,18 +1220,20 @@ function genEnPassPawnMoves (frMove) {
 //}}}
 //{{{  genHomePawnMoves
 
-function genHomePawnMoves (frMove) {
+void genHomePawnMoves (move_t frMove) {
 
-  const b = bBoard;
+  int *b = bBoard;
 
-  const fr           = moveFromSq(frMove);
-  const cx           = colourIndex(bTurn);
-  const CAN_CAPTURE  = WB_CAN_CAPTURE[cx];
-  const OFFSET_ORTH  = WB_OFFSET_ORTH[cx];
-  const OFFSET_DIAG1 = WB_OFFSET_DIAG1[cx];
-  const OFFSET_DIAG2 = WB_OFFSET_DIAG2[cx];
+  const int fr           = moveFromSq(frMove);
+  const int cx           = colourIndex(bTurn);
+  const int *CAN_CAPTURE = WB_CAN_CAPTURE[cx];
+  const int OFFSET_ORTH  = WB_OFFSET_ORTH[cx];
+  const int OFFSET_DIAG1 = WB_OFFSET_DIAG1[cx];
+  const int OFFSET_DIAG2 = WB_OFFSET_DIAG2[cx];
 
-  var to = fr + OFFSET_ORTH;
+  int to, toObj;
+
+  to = fr + OFFSET_ORTH;
   if (!b[to]) {
     addQuiet(frMove | to);
     to += OFFSET_ORTH;
@@ -1623,13 +1241,13 @@ function genHomePawnMoves (frMove) {
       addQuiet(frMove | to | MOVE_EPMAKE_MASK);
   }
 
-  var to    = fr + OFFSET_DIAG1;
-  var toObj = b[to];
+  to    = fr + OFFSET_DIAG1;
+  toObj = b[to];
   if (CAN_CAPTURE[toObj])
     addNoisy(frMove | (toObj << MOVE_TOOBJ_BITS) | to);
 
-  var to    = fr + OFFSET_DIAG2;
-  var toObj = b[to];
+  to    = fr + OFFSET_DIAG2;
+  toObj = b[to];
   if (CAN_CAPTURE[toObj])
     addNoisy(frMove | (toObj << MOVE_TOOBJ_BITS) | to);
 }
@@ -1637,18 +1255,20 @@ function genHomePawnMoves (frMove) {
 //}}}
 //{{{  genPromotePawnMoves
 
-function genPromotePawnMoves (frMove) {
+void genPromotePawnMoves (move_t frMove) {
 
-  const b = bBoard;
+  int *b = bBoard;
 
-  const fr           = moveFromSq(frMove);
-  const cx           = colourIndex(bTurn);
-  const CAN_CAPTURE  = WB_CAN_CAPTURE[cx];
-  const OFFSET_ORTH  = WB_OFFSET_ORTH[cx];
-  const OFFSET_DIAG1 = WB_OFFSET_DIAG1[cx];
-  const OFFSET_DIAG2 = WB_OFFSET_DIAG2[cx];
+  const int fr           = moveFromSq(frMove);
+  const int cx           = colourIndex(bTurn);
+  const int *CAN_CAPTURE = WB_CAN_CAPTURE[cx];
+  const int OFFSET_ORTH  = WB_OFFSET_ORTH[cx];
+  const int OFFSET_DIAG1 = WB_OFFSET_DIAG1[cx];
+  const int OFFSET_DIAG2 = WB_OFFSET_DIAG2[cx];
 
-  var to = fr + OFFSET_ORTH;
+  int to, toObj;
+
+  to = fr + OFFSET_ORTH;
   if (!b[to]) {
     addQuiet(frMove | to | QPRO);
     addQuiet(frMove | to | RPRO);
@@ -1656,8 +1276,8 @@ function genPromotePawnMoves (frMove) {
     addQuiet(frMove | to | NPRO);
   }
 
-  var to    = fr + OFFSET_DIAG1;
-  var toObj = b[to];
+  to    = fr + OFFSET_DIAG1;
+  toObj = b[to];
   if (CAN_CAPTURE[toObj]) {
     addNoisy(frMove | (toObj << MOVE_TOOBJ_BITS) | to | QPRO);
     addNoisy(frMove | (toObj << MOVE_TOOBJ_BITS) | to | RPRO);
@@ -1665,8 +1285,8 @@ function genPromotePawnMoves (frMove) {
     addNoisy(frMove | (toObj << MOVE_TOOBJ_BITS) | to | NPRO);
   }
 
-  var to    = fr + OFFSET_DIAG2;
-  var toObj = b[to];
+  to    = fr + OFFSET_DIAG2;
+  toObj = b[to];
   if (CAN_CAPTURE[toObj]) {
     addNoisy(frMove | (toObj << MOVE_TOOBJ_BITS) | to | QPRO);
     addNoisy(frMove | (toObj << MOVE_TOOBJ_BITS) | to | RPRO);
@@ -1676,28 +1296,27 @@ function genPromotePawnMoves (frMove) {
 }
 
 //}}}
-
 //{{{  genKingMoves
 
-function genKingMoves (frMove) {
+void genKingMoves (move_t frMove) {
 
-  const b = bBoard;
+  int *b = bBoard;
 
-  const fr          = moveFromSq(frMove);
-  const cx          = colourIndex(bTurn);
-  const cy          = colourIndex(colourToggle(bTurn));
-  const CAN_CAPTURE = WB_CAN_CAPTURE[cx];
-  const theirKingSq = bKings[cy];
+  const int fr           = moveFromSq(frMove);
+  const int cx           = colourIndex(bTurn);
+  const int cy           = colourIndex(colourToggle(bTurn));
+  const int *CAN_CAPTURE = WB_CAN_CAPTURE[cx];
+  const int theirKingSq  = bKings[cy];
 
-  var dir = 0;
+  int dir = 0;
 
   while (dir < 8) {
 
-    const to = fr + KING_OFFSETS[dir++];
+    const int to = fr + KING_OFFSETS[dir++];
 
-    if (!ADJACENT[Math.abs(to-theirKingSq)]) {
+    if (!ADJACENT[abs(to-theirKingSq)]) {
 
-      const toObj = b[to];
+      const int toObj = b[to];
 
       if (!toObj)
         addQuiet(frMove | to | MOVE_KINGMOVE_MASK);
@@ -1711,20 +1330,20 @@ function genKingMoves (frMove) {
 //}}}
 //{{{  genKnightMoves
 
-function genKnightMoves (frMove) {
+void genKnightMoves (move_t frMove) {
 
-  const b = bBoard;
+  int *b = bBoard;
 
-  const fr          = moveFromSq(frMove);
-  const cx          = colourIndex(bTurn);
-  const CAN_CAPTURE = WB_CAN_CAPTURE[cx];
+  const int fr           = moveFromSq(frMove);
+  const int cx           = colourIndex(bTurn);
+  const int *CAN_CAPTURE = WB_CAN_CAPTURE[cx];
 
-  var dir = 0;
+  int dir = 0;
 
   while (dir < 8) {
 
-    const to    = fr + KNIGHT_OFFSETS[dir++];
-    const toObj = b[to];
+    const int to    = fr + KNIGHT_OFFSETS[dir++];
+    const int toObj = b[to];
 
     if (!toObj)
       addQuiet(frMove | to);
@@ -1735,310 +1354,237 @@ function genKnightMoves (frMove) {
 }
 
 //}}}
-//{{{  genSliderMoves
+//{{{  genBishopMoves
 
-function genSliderMoves (frMove) {
+void genBishopMoves (move_t frMove) {
 
-  const b = bBoard;
+  int *b = bBoard;
 
-  const fr          = moveFromSq(frMove);
-  const frObj       = moveFromObj(frMove);
-  const frPiece     = objPiece(frObj);
-  const cx          = colourIndex(bTurn);
-  const CAN_CAPTURE = WB_CAN_CAPTURE[cx];
-  const OFFSETS     = SLIDER_OFFSETS[frPiece];
-  const len         = OFFSETS.length;
+  const int fr           = moveFromSq(frMove);
+  const int cx           = colourIndex(bTurn);
+  const int *CAN_CAPTURE = WB_CAN_CAPTURE[cx];
 
-  var dir = 0;
+  int dir = 0;
 
-  while (dir < len) {
+  while (dir < 4) {
 
-    const offset = OFFSETS[dir++];
+    const int offset = BISHOP_OFFSETS[dir++];
 
-    let to = fr + offset;
+    int to = fr + offset;
     while (!b[to]) {
       addQuiet(frMove | to);
       to += offset;
     }
 
-    const toObj = b[to];
+    const int toObj = b[to];
     if (CAN_CAPTURE[toObj])
       addNoisy(frMove | (toObj << MOVE_TOOBJ_BITS) | to);
   }
 }
 
 //}}}
+//{{{  genRookMoves
 
-//}}}
-//{{{  hash
+void genRookMoves (move_t frMove) {
 
-const hSeed     = new Uint32Array(1);
-const hLo       = new Uint32Array(1);
-const hHi       = new Uint32Array(1);
-const hLoTurn   = new Uint32Array(9);
-const hHiTurn   = new Uint32Array(9);
-const hLoRights = new Uint32Array(16);
-const hHiRights = new Uint32Array(16);
-const hLoEP     = new Uint32Array(144);
-const hHiEP     = new Uint32Array(144);
-const hLoObj    = Array(16);
-const hHiObj    = Array(16);
+  int *b = bBoard;
 
-//{{{  rand
+  const int fr           = moveFromSq(frMove);
+  const int cx           = colourIndex(bTurn);
+  const int *CAN_CAPTURE = WB_CAN_CAPTURE[cx];
 
-function rand () {  // thanks Maksim
+  int dir = 0;
 
-  hSeed[0] ^= hSeed[0] << 13;
-  hSeed[0] ^= hSeed[0] >> 17;
-  hSeed[0] ^= hSeed[0] << 5;
+  while (dir < 4) {
 
-  return hSeed[0];
+    const int offset = ROOK_OFFSETS[dir++];
+
+    int to = fr + offset;
+    while (!b[to]) {
+      addQuiet(frMove | to);
+      to += offset;
+    }
+
+    const int toObj = b[to];
+    if (CAN_CAPTURE[toObj])
+      addNoisy(frMove | (toObj << MOVE_TOOBJ_BITS) | to);
+  }
 }
 
 //}}}
-//{{{  hashInitOnce
+//{{{  genQueenMoves
 
-function hashInitOnce () {
+void genQueenMoves (move_t frMove) {
 
-  hSeed[0] = 1804289383;
+  int *b = bBoard;
 
-  for (let i=0; i < hLoTurn.length; i++) {
-    hLoTurn[i] = rand();
-    hHiTurn[i] = rand();
+  const int fr           = moveFromSq(frMove);
+  const int cx           = colourIndex(bTurn);
+  const int *CAN_CAPTURE = WB_CAN_CAPTURE[cx];
+
+  int dir = 0;
+
+  while (dir < 8) {
+
+    const int offset = QUEEN_OFFSETS[dir++];
+
+    int to = fr + offset;
+    while (!b[to]) {
+      addQuiet(frMove | to);
+      to += offset;
+    }
+
+    const int toObj = b[to];
+    if (CAN_CAPTURE[toObj])
+      addNoisy(frMove | (toObj << MOVE_TOOBJ_BITS) | to);
   }
+}
 
-  for (let i=0; i < hLoRights.length; i++) {
-    hLoRights[i] = rand();
-    hHiRights[i] = rand();
-  }
+//}}}
+//{{{  genMoves
 
-  for (let i=0; i < hLoEP.length; i++) {
-    hLoEP[i] = rand();
-    hHiEP[i] = rand();
-  }
+void genMoves () {
 
-  for (let i=1; i < hLoObj.length; i++) {
-    hLoObj[i] = new Uint32Array(144);
-    hHiObj[i] = new Uint32Array(144);
-    for (let j=0; j < 144; j++) {
-      hLoObj[i][j] = rand();
-      hHiObj[i][j] = rand();
+  int *b = bBoard;
+
+  const int cx           = colourIndex(bTurn);
+  const int *OUR_PIECE   = WB_OUR_PIECE[cx];
+  const int HOME_RANK    = WB_HOME_RANK[cx];
+  const int PROMOTE_RANK = WB_PROMOTE_RANK[cx];
+  const int EP_RANK      = WB_EP_RANK[cx];
+
+  if (bTurn == WHITE)
+    genWhiteCastlingMoves();
+  else
+    genBlackCastlingMoves();
+
+  for (int i=0; i<64; i++) {
+
+    const int fr    = B88[i];
+    const int frObj = b[fr];
+
+    if (!OUR_PIECE[frObj])
+      continue;
+
+    const int frPiece   = objPiece(frObj);
+    const int frRank    = RANK[fr];
+    const move_t frMove = (move_t)((frObj << MOVE_FROBJ_BITS) | (fr << MOVE_FR_BITS));
+
+    switch (frPiece) {
+
+      case KING:
+        genKingMoves(frMove);
+        break;
+
+      case PAWN:
+        if (frRank == HOME_RANK) {
+          genHomePawnMoves(frMove);
+        }
+        else if (frRank == PROMOTE_RANK) {
+          genPromotePawnMoves(frMove);
+        }
+        else if (frRank == EP_RANK) {
+          genPawnMoves(frMove);
+          if (bEP)
+            genEnPassPawnMoves(frMove);
+        }
+        else {
+          genPawnMoves(frMove);
+        }
+        break;
+
+      case ROOK:
+        genRookMoves(frMove);
+        break;
+
+      case KNIGHT:
+        genKnightMoves(frMove);
+        break;
+
+      case BISHOP:
+        genBishopMoves(frMove);
+        break;
+
+      case QUEEN:
+        genQueenMoves(frMove);
+        break;
     }
   }
-  hLoObj[0] = new Uint32Array(144);
-  hHiObj[0] = new Uint32Array(144);
-  for (let j=0; j < 144; j++) {
-    hLoObj[0][j] = 0;
-    hHiObj[0][j] = 0;
+}
+
+//}}}
+//{{{  nextStagedMove
+
+move_t nextStagedMove (int next, int num, move_t *moves, int *ranks) {
+
+  int maxR = -10000;
+  int maxI = 0;
+
+  for (int i=next; i < num; i++) {
+    if (ranks[i] > maxR) {
+      maxR = ranks[i];
+      maxI = i;
+    }
+  }
+
+  const move_t maxM = moves[maxI];
+
+  moves[maxI] = moves[next];
+  ranks[maxI] = ranks[next];
+
+  return maxM;
+}
+
+//}}}
+//{{{  getNextMove
+
+move_t getNextMove () {
+
+  struct movelistStruct *ml = &movelist[bPly];
+
+  switch (ml->stage) {
+
+    case 0:
+
+      ml->noisyNum = 0;
+      ml->quietNum = 0;
+
+      genMoves();
+
+      ml->nextMove = 0;
+      ml->stage++;
+
+    case 1:
+
+      if (ml->nextMove < ml->noisyNum)
+        return nextStagedMove(ml->nextMove++, ml->noisyNum, ml->noisyMoves, ml->noisyRanks);
+
+      if (ml->noisy)
+        return 0;
+
+      ml->nextMove = 0;
+      ml->stage++;
+
+    case 2:
+
+      if (ml->nextMove < ml->quietNum)
+        return nextStagedMove(ml->nextMove++, ml->quietNum, ml->quietMoves, ml->quietRanks);
+
+      return 0;
   }
 }
 
 //}}}
-//{{{  hashReset
 
-function hashReset() {
-
-  hLo[0] = 0;
-  hHi[0] = 0;
-}
-
-//}}}
-//{{{  hashCalc
-
-function hashCalc() {
-
-  hashReset();
-
-  for (let i=0; i < 64; i++) {
-    let sq  = B88[i];
-    let obj = bBoard[sq];
-    hashObj(obj,sq);
-  }
-
-  hashTurn(bTurn);
-  hashRights(bRights);
-  hashEP(bEP);
-}
-
-//}}}
-//{{{  hashTurn
-
-function hashTurn(turn) {
-  hLo[0] ^= hLoTurn[turn];
-  hHi[0] ^= hHiTurn[turn];
-}
-
-//}}}
-//{{{  hashRights
-
-function hashRights (rights) {
-  hLo[0] ^= hLoRights[rights];
-  hHi[0] ^= hHiRights[rights];
-}
-
-//}}}
-//{{{  hashEP
-
-function hashEP(ep) {
-  hLo[0] ^= hLoEP[ep];
-  hHi[0] ^= hHiEP[ep];
-}
-
-//}}}
-//{{{  hashObj
-
-function hashObj(obj, sq) {
-  hLo[0] ^= hLoObj[obj][sq];
-  hHi[0] ^= hHiObj[obj][sq];
-}
-
-//}}}
-
-//}}}
-//{{{  tt
-
-const TT_SIZE  = 1 << 20;
-const TT_MASK  = TT_SIZE - 1;
-const TT_EXACT = 0x01;
-const TT_ALPHA = 0x02;
-const TT_BETA  = 0x04;
-
-const ttLo    = new Uint32Array(TT_SIZE);
-const ttHi    = new Uint32Array(TT_SIZE);
-const ttFlags = new Uint8Array(TT_SIZE);
-const ttScore = new Int16Array(TT_SIZE);
-const ttDepth = new Uint8Array(TT_SIZE);
-
-function ttInit () {
-  ttFlags.fill(0);
-}
-
-function ttPut (flags, depth, score) {
-
-  var i = hLo[0] & TT_MASK;
-
-  ttLo[i] = hLo[0];
-  ttHi[i] = hHi[0];
-
-  ttFlags[i] = flags;
-  ttDepth[i] = depth;
-  ttScore[i] = score;
-}
-
-function ttIndex () {
-
-  let i = hLo[0] & TT_MASK;
-
-  if (ttFlags[i] && ttLo[i] == hLo[0] && ttHi[i] == hHi[0])
-    return i;
-  else
-    return 0;
-}
-
-//}}}
-//{{{  cache
-
-//{{{  cacheStruct
-
-function cacheStruct () {
-
-  this.bRights = 0;
-  this.bEP     = 0;
-  this.hLo     = new Uint32Array(1);
-  this.hHi     = new Uint32Array(1);
-}
-
-//}}}
-
-const cache = Array(MAX_PLY);
-
-//{{{  cacheInitOnce
-
-function cacheInitOnce() {
-
-  for (let i=0; i < cache.length; i++)
-    cache[i] = new cacheStruct();
-}
-
-//}}}
-
-//{{{  cacheSave
-
-function cacheSave () {
-
-  const c = cache[bPly];
-
-  c.bRights = bRights;
-  c.bEP     = bEP;
-  c.hLo[0]  = hLo[0];
-  c.hHi[0]  = hHi[0];
-}
-
-//}}}
-//{{{  cacheUnsave
-
-function cacheUnsave () {
-
-  const c = cache[bPly];
-
-  bRights = c.bRights;
-  bEP     = c.bEP;
-  hLo[0]  = c.hLo[0];
-  hHi[0]  = c.hHi[0];
-}
-
-//}}}
-
-
-//}}}
-
-//{{{  makeMove
-
-function makeMove (move) {
-
-  const b = bBoard;
-
-  const fr    = moveFromSq(move);
-  const to    = moveToSq(move);
-  const frObj = moveFromObj(move);
-  const toObj = moveToObj(move);
-
-  hashObj(frObj,fr);
-  b[fr] = 0;
-  hashObj(0,fr);
-
-  hashObj(toObj,to);
-  b[to] = frObj;
-  hashObj(frObj,to);
-
-  hashTurn(bTurn);
-  bTurn = colourToggle(bTurn);
-  hashTurn(bTurn);
-
-  hashRights(bRights);
-  bRights &= MASK_RIGHTS[fr] & MASK_RIGHTS[to];
-  hashRights(bRights);
-
-  hashEP(bEP);
-  bEP = 0;
-  hashEP(bEP);
-
-  if (move & MOVE_IKKY_MASK)
-    makeIkkyMove(move);
-
-  bPly++;
-}
-
-//}}}
 //{{{  makeIkkyMove
 
-function makeIkkyMove (move) {
+void makeIkkyMove (move_t move) {
 
-  const b = bBoard;
+  int *b = bBoard;
 
-  const to    = moveToSq(move);
-  const frObj = moveFromObj(move);
-  const frCol = objColour(frObj);
+  const int to    = moveToSq(move);
+  const int frObj = moveFromObj(move);
+  const int frCol = objColour(frObj);
 
   if (frCol == WHITE) {
     //{{{  white
@@ -2158,38 +1704,54 @@ function makeIkkyMove (move) {
 }
 
 //}}}
-//{{{  unmakeMove
+//{{{  makeMove
 
-function unmakeMove (move) {
+void makeMove (move_t move) {
 
-  const b = bBoard;
+  int *b = bBoard;
 
-  const fr    = moveFromSq(move);
-  const to    = moveToSq(move);
-  const toObj = moveToObj(move);
-  const frObj = moveFromObj(move);
+  const int fr    = moveFromSq(move);
+  const int to    = moveToSq(move);
+  const int frObj = moveFromObj(move);
+  const int toObj = moveToObj(move);
 
-  b[fr] = frObj;
-  b[to] = toObj;
+  hashObj(frObj,fr);
+  b[fr] = 0;
+  hashObj(0,fr);
+
+  hashObj(toObj,to);
+  b[to] = frObj;
+  hashObj(frObj,to);
+
+  hashTurn(bTurn);
+  bTurn = colourToggle(bTurn);
+  hashTurn(bTurn);
+
+  hashRights(bRights);
+  bRights &= MASK_RIGHTS[fr] & MASK_RIGHTS[to];
+  hashRights(bRights);
+
+  hashEP(bEP);
+  bEP = 0;
+  hashEP(bEP);
 
   if (move & MOVE_IKKY_MASK)
-    unmakeIkkyMove(move);
+    makeIkkyMove(move);
 
-  bTurn = colourToggle(bTurn);
-  bPly--;
+  bPly++;
 }
 
 //}}}
 //{{{  unmakeIkkyMove
 
-function unmakeIkkyMove (move) {
+void unmakeIkkyMove (move_t move) {
 
-  const b = bBoard;
+  int *b = bBoard;
 
-  const fr    = moveFromSq(move);
-  const to    = moveToSq(move);
-  const frObj = moveFromObj(move);
-  const frCol = objColour(frObj);
+  const int fr    = moveFromSq(move);
+  const int to    = moveToSq(move);
+  const int frObj = moveFromObj(move);
+  const int frCol = objColour(frObj);
 
   if (frCol == WHITE) {
     //{{{  white
@@ -2253,60 +1815,200 @@ function unmakeIkkyMove (move) {
 }
 
 //}}}
-//{{{  isKingAttacked
+//{{{  unmakeMove
 
-function isKingAttacked (to, byCol) {
+void unmakeMove (move_t move) {
 
-  const b = bBoard;
+  int *b = bBoard;
 
-  const cx = colourIndex(byCol);
+  const int fr    = moveFromSq(move);
+  const int to    = moveToSq(move);
+  const int toObj = moveToObj(move);
+  const int frObj = moveFromObj(move);
 
-  const OFFSET_DIAG1 = -WB_OFFSET_DIAG1[cx];
-  const OFFSET_DIAG2 = -WB_OFFSET_DIAG2[cx];
-  const RQ           = WB_RQ[cx];
-  const BQ           = WB_BQ[cx];
-  const BY_PAWN      = WB_PAWN[cx];
-  const N            = KNIGHT | byCol;
+  b[fr] = frObj;
+  b[to] = toObj;
 
-  var fr = 0;
+  if (move & MOVE_IKKY_MASK)
+    unmakeIkkyMove(move);
 
-  //{{{  pawns
-  
-  if (b[to+OFFSET_DIAG1] == BY_PAWN || b[to+OFFSET_DIAG2] == BY_PAWN)
+  bTurn = colourToggle(bTurn);
+  bPly--;
+}
+
+//}}}
+
+//}}}
+//{{{  search
+
+//{{{  newGame
+
+void newGame () {
+  ttInit();
+}
+
+//}}}
+//{{{  perft
+
+uint32 perft (int depth) {
+
+  if (depth == 0)
     return 1;
+
+  const int turn      = bTurn;
+  const int nextTurn  = colourToggle(turn);
+  const int cx        = colourIndex(turn);
+
+  uint32 count = 0;
+  move_t move;
+
+  cacheSave();
+  initMoveGen(ALL_MOVES);
+
+  while ((move = getNextMove())) {
+
+    makeMove(move);
+
+    if (isKingAttacked(bKings[cx], nextTurn)) {
+      //{{{  illegal move
+      
+      unmakeMove(move);
+      cacheUnsave();
+      
+      continue;
+      
+      //}}}
+    }
+
+    count += perft(depth-1);
+
+    unmakeMove(move);
+    cacheUnsave();
+  }
+
+  return count;
+}
+
+//}}}
+
+//}}}
+//{{{  uci
+
+#define MAX_LINE_LENGTH 8192
+#define MAX_TOKENS 8192
+
+//{{{  uciTokens
+
+int uciTokens(int n, char **tokens) {
+
+  char *cmd = tokens[0];
+  char *sub = tokens[1];
+
+  if (!strcmp(cmd,"position") || !strcmp(cmd,"p")) {
+    if (!strcmp(sub,"startpos") || !strcmp(sub,"s")) {
+      position("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR", "w", "KQkq", "-");
+    }
+  }
+
+  else if (!strcmp(cmd,"ucinewgame") || !strcmp(cmd,"u")) {
+    ttInit();
+  }
+
+  else if (!strcmp(cmd,"uci")) {
+    printf("id name clozza 1\n");
+    printf("id author Colin Jenkins\n");
+    printf("uciok\n");
+  }
+
+  else if (!strcmp(cmd,"b")) {
+    printBoard();
+  }
+
+  else if (!strcmp(cmd,"e")) {
+    const int e = evaluate();
+    printf("%d\n",e);
+  }
+
+  else if (!strcmp(cmd,"q")) {
+    return 1;
+  }
+
+  else if (!strcmp(cmd,"perft")) {
+    //{{{  perft
+    
+    const int depth     = atoi(sub);
+    const uint32 t      = clock();
+    const uint32 pmoves = perft(depth);
+    
+    printf("%u moves %u ms\n", pmoves, clock()-t);
+    
+    //}}}
+  }
+
+  else {
+    printf("?\n");
+  }
+
+  return 0;
+}
+
+//}}}
+//{{{  uciExec
+
+int uciExec (char *line) {
+
+  char *tokens[MAX_TOKENS];
+  char *token;
+
+  int num_tokens = 0;
+
+  token = strtok(line, " \t\n");
+
+  while (token != NULL && num_tokens < MAX_TOKENS) {
+
+    tokens[num_tokens++] = token;
+
+    token = strtok(NULL, " \r\t\n");
+  }
+
+  return uciTokens(num_tokens, tokens);
+}
+
+//}}}
+
+//}}}
+
+int main(int argc, char **argv) {
+
+  char chunk[MAX_LINE_LENGTH];
+
+  hashInitOnce();
+  evalInitOnce();
+
+  //{{{  exec args
+  
+  for (int i=1; i < argc; i++) {
+    if (uciExec(argv[i]))
+      return 0;
+  }
   
   //}}}
-  //{{{  knights
+  //{{{  exec stdio
   
-  if ((b[to + -10] == N) ||
-      (b[to + -23] == N) ||
-      (b[to + -14] == N) ||
-      (b[to + -25] == N) ||
-      (b[to +  10] == N) ||
-      (b[to +  23] == N) ||
-      (b[to +  14] == N) ||
-      (b[to +  25] == N)) return 1;
-  
-  //}}}
-  //{{{  queen, bishop, rook
-  
-  fr = to + 1;  while (!b[fr]) fr += 1;  if (RQ[b[fr]]) return 1;
-  fr = to - 1;  while (!b[fr]) fr -= 1;  if (RQ[b[fr]]) return 1;
-  fr = to + 12; while (!b[fr]) fr += 12; if (RQ[b[fr]]) return 1;
-  fr = to - 12; while (!b[fr]) fr -= 12; if (RQ[b[fr]]) return 1;
-  
-  fr = to + 11; while (!b[fr]) fr += 11; if (BQ[b[fr]]) return 1;
-  fr = to - 11; while (!b[fr]) fr -= 11; if (BQ[b[fr]]) return 1;
-  fr = to + 13; while (!b[fr]) fr += 13; if (BQ[b[fr]]) return 1;
-  fr = to - 13; while (!b[fr]) fr -= 13; if (BQ[b[fr]]) return 1;
+  while (fgets(chunk, sizeof(chunk), stdin) != NULL) {
+    if (uciExec(chunk))
+      return 0;
+  }
   
   //}}}
 
   return 0;
 }
 
+//{{{  todo
 
-//}}}
+/*
+
 //{{{  formatMove
 
 function formatMove (move) {
@@ -2334,13 +2036,6 @@ function formatMove (move) {
   const pro = (move & MOVE_PROMOTE_MASK) ? OBJ_CHAR[movePromotePiece(move)|BLACK] : '';
 
   return frCoord + toCoord + pro;
-}
-
-//}}}
-//{{{  newGame
-
-function newGame () {
-  ttInit();
 }
 
 //}}}
@@ -2621,60 +2316,6 @@ function qsearch (alpha, beta, depth) {
 }
 
 //}}}
-//{{{  perft
-
-function perft (depth) {
-
-  if (depth == 0)
-    return 1;
-
-  const turn      = bTurn;
-  const nextTurn  = colourToggle(turn);
-  const cx        = colourIndex(turn);
-
-  var count = 0;
-  var move  = 0;
-
-  cacheSave();
-  initMoveGen(ALL_MOVES);
-
-  while (move = getNextMove()) {
-
-    makeMove(move);
-
-    if (isKingAttacked(bKings[cx], nextTurn)) {
-      //{{{  illegal move
-      
-      unmakeMove(move);
-      cacheUnsave();
-      
-      continue;
-      
-      //}}}
-    }
-
-    count += perft(depth-1);
-
-    unmakeMove(move);
-    cacheUnsave();
-  }
-
-  return count;
-}
-
-//}}}
-//{{{  uciArgv
-
-function uciArgv() {
-
-  if (process.argv.length > 2) {
-    for (let i=2; i < process.argv.length; i++)
-      uciExec(process.argv[i]);
-  }
-
-}
-
-//}}}
 //{{{  uciExec
 
 function uciExec(e) {
@@ -2912,6 +2553,7 @@ function uciExec(e) {
         //}}}
       }
 
+//{{{        case 'perft': {
       case 'perft': {
         //{{{  perft
         
@@ -2926,6 +2568,7 @@ function uciExec(e) {
         //}}}
       }
 
+//}}}
       case 'bench': {
         //{{{  bench
         
@@ -3144,34 +2787,6 @@ function uciExec(e) {
 }
 
 //}}}
-//{{{  uciPost
-
-function uciPost (s) {
-  console.log(s);
-}
-
-//}}}
-//{{{  uciSend
-
-function uciSend () {
-
-  if (mSilent)
-    return;
-
-  var s = '';
-
-  for (var i = 0; i < arguments.length; i++)
-    s += arguments[i] + ' ';
-
-  uciPost(s);
-}
-
-//}}}
-
-movelistInitOnce();
-hashInitOnce();
-cacheInitOnce();
-evalInitOnce();
 
 */
 

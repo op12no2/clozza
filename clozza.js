@@ -1054,9 +1054,9 @@ const hHiObj    = Array(16);
 
 function rand () {  // thanks Maksim
 
-  hSeed[0] ^= hSeed[0] << 13;
-  hSeed[0] ^= hSeed[0] >> 17;
-  hSeed[0] ^= hSeed[0] << 5;
+  hSeed[0] ^= hSeed[0] << 13 | 0;
+  hSeed[0] ^= hSeed[0] >>> 17 | 0;
+  hSeed[0] ^= hSeed[0] << 5  | 0;
 
   return hSeed[0];
 }
