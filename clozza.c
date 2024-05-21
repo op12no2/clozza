@@ -1,7 +1,86 @@
 
-"use strict"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
+#include <assert.h>
 
-const BUILD = "1";
+//{{{  uciTokens
+
+int uciTokens(int n, char **tokens) {
+
+  char *cmd = tokens[0];
+
+  if (!strcmp(cmd,"q")) {
+    return 1;
+  }
+
+  else if (!strcmp(cmd,"uci")) {
+    printf("id name clozza 1\n");
+    printf("id author Colin Jenkins\n");
+    printf("uciok\n");
+  }
+
+  else {
+    printf("?\n");
+  }
+
+  return 0;
+}
+
+//}}}
+//{{{  uciExec
+
+#define MAX_TOKENS 8192
+
+int uciExec (char *line) {
+
+  char *tokens[MAX_TOKENS];
+  char *token;
+
+  int num_tokens = 0;
+
+  token = strtok(line, " \t\n");
+
+  while (token != NULL && num_tokens < MAX_TOKENS) {
+
+    tokens[num_tokens++] = token;
+
+    token = strtok(NULL, " \r\t\n");
+  }
+
+  return uciTokens(num_tokens, tokens);
+}
+
+//}}}
+
+#define MAX_LINE_LENGTH 8192
+
+int main(int argc, char **argv) {
+
+  char chunk[MAX_LINE_LENGTH];
+
+  //{{{  exec args
+  
+  for (int i=1; i < argc; i++) {
+    if (uciExec(argv[i]))
+      return 0;
+  }
+  
+  //}}}
+  //{{{  exec stdio
+  
+  while (fgets(chunk, sizeof(chunk), stdin) != NULL) {
+    if (uciExec(chunk))
+      return 0;
+  }
+  
+  //}}}
+
+  return 0;
+}
+
+/*
 
 //{{{  misc
 
@@ -31,8 +110,19 @@ function areWeDone() {
 const WHITE = 0x0;
 const BLACK = 0x8;
 
+//cstart
+#define WHITE 0x0
+#define BLACK 0x8
+//cend
+
 const PIECE_MASK  = 0x7;
 const COLOUR_MASK = 0x8;
+
+//cstart
+#define PIECE_MASK  0x7
+#define COLOUR_MASK 0x8
+//cend
+
 
 const PAWN   = 1;
 const KNIGHT = 2;
@@ -2107,29 +2197,6 @@ function uciArgv() {
 }
 
 //}}}
-//{{{  uciPost
-
-function uciPost (s) {
-  console.log(s);
-}
-
-//}}}
-//{{{  uciSend
-
-function uciSend () {
-
-  if (mSilent)
-    return;
-
-  var s = '';
-
-  for (var i = 0; i < arguments.length; i++)
-    s += arguments[i] + ' ';
-
-  uciPost(s);
-}
-
-//}}}
 //{{{  uciExec
 
 function uciExec(e) {
@@ -2599,31 +2666,34 @@ function uciExec(e) {
 }
 
 //}}}
+//{{{  uciPost
+
+function uciPost (s) {
+  console.log(s);
+}
+
+//}}}
+//{{{  uciSend
+
+function uciSend () {
+
+  if (mSilent)
+    return;
+
+  var s = '';
+
+  for (var i = 0; i < arguments.length; i++)
+    s += arguments[i] + ' ';
+
+  uciPost(s);
+}
+
+//}}}
 
 movelistInitOnce();
 hashInitOnce();
 cacheInitOnce();
 evalInitOnce();
 
-//{{{  connect to stdio
-
-var fs = require('fs');
-
-process.stdin.setEncoding('utf8');
-
-process.stdin.on('readable', function() {
-  var chunk = process.stdin.read();
-  process.stdin.resume();
-  if (chunk !== null) {
-    uciExec(chunk);
-  }
-});
-
-process.stdin.on('end', function() {
-  process.exit();
-});
-
-//}}}
-
-uciArgv();
+*/
 
