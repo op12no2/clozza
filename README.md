@@ -1,18 +1,18 @@
 # clozza
 
-An experimental line-for-line ish C translation of a simplified version of my Javascript chess engine Lozza - to see what the speed/ELO difference is. The translation uses a 2x 32 bit hash, like Lozza. Evaluation and search (bench) results are identical. 
+clozza.js is a simplified version of my Javascript chess engine Lozza.
 
-Both sources are in clozza.js.
+Within clozza.js is a hand-crafted translation of the Javascript to C.  
 
-Use:-
+The idea is find out what the ELO difference is between C and V8 Javascript in a chess engine context.
+
+Example use:-
 
 <pre>
 node clozza.js bench q
-51794675
 grep '^//c ' clozza.js > clozza.c
 clang -o clozza other-options clozza.c
 ./clozza bench q
-51794675
 </pre>
 
-WIP...
+Both results should be the same, but it's all WIP at the moment...
