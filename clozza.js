@@ -3,19 +3,23 @@
 
 const BUILD = "1";
 
+//{{{  c headers
+
+//cstart
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+//cend
+
+//}}}
+
 //{{{  misc
 
 const MATE = 32000;
 
 var mSilent = 0;
-
-//{{{  myround
-
-function myround(x) {
-  return Math.sign(x) * Math.round(Math.abs(x));
-}
-
-//}}}
 
 //}}}
 //{{{  timing
@@ -2136,6 +2140,8 @@ function uciSend () {
 //}}}
 //{{{  uciExec
 
+//{{{  uciExec
+
 function uciExec(e) {
 
   var messageList = e.split('\n');
@@ -2604,12 +2610,63 @@ function uciExec(e) {
 
 //}}}
 
+//cstart
+//{{{  uciTokens
+
+int uciTokens(int n, char **tokens) {
+
+  char *cmd = tokens[0];
+
+  if (!strcmp(cmd,"q")) {
+    return 1;
+  }
+
+  else if (!strcmp(cmd,"uci")) {
+    printf("id name clozza 1\n");
+    printf("id author Colin Jenkins\n");
+    printf("uciok\n");
+  }
+
+  else {
+    printf("?\n");
+  }
+
+  return 0;
+}
+
+//}}}
+//{{{  uciExec
+
+#define MAX_TOKENS 8192
+
+int uciExec (char *line) {
+
+  char *tokens[MAX_TOKENS];
+  char *token;
+
+  int num_tokens = 0;
+
+  token = strtok(line, " \t\n");
+
+  while (token != NULL && num_tokens < MAX_TOKENS) {
+
+    tokens[num_tokens++] = token;
+
+    token = strtok(NULL, " \r\t\n");
+  }
+
+  return uciTokens(num_tokens, tokens);
+}
+
+//}}}
+//cend
+
+//}}}
+
 movelistInitOnce();
 hashInitOnce();
 cacheInitOnce();
 evalInitOnce();
-
-uciArgv();
 
 //{{{  connect to stdio
 
@@ -2628,6 +2685,38 @@ process.stdin.on('readable', function() {
 process.stdin.on('end', function() {
   process.exit();
 });
+
+//cstart
+
+#define MAX_LINE_LENGTH 8192
+
+int main(int argc, char **argv) {
+
+  char chunk[MAX_LINE_LENGTH];
+
+  //{{{  exec args
+  
+  for (int i=1; i < argc; i++) {
+    if (uciExec(argv[i]))
+      return 0;
+  }
+  
+  //}}}
+  //{{{  exec stdio
+  
+  while (fgets(chunk, sizeof(chunk), stdin) != NULL) {
+    if (uciExec(chunk))
+      return 0;
+  }
+  
+  //}}}
+
+  return 0;
+}
+
+//cend
+
+uciArgv();
 
 //}}}
 
