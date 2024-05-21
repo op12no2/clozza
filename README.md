@@ -10,7 +10,7 @@ Example use:-
 
 <pre>
 node clozza.js bench q
-grep '^//c ' clozza.js > clozza.c
+awk '/\/\/cstart/{flag=1; next} /\/\/cend/{flag=0} flag' clozza.js > clozza.c
 clang -o clozza other-options clozza.c
 ./clozza bench q
 </pre>
