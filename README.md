@@ -9,9 +9,9 @@ The idea being to find out what the ELO difference is between C and V8 Javascrip
 Example use:-
 
 <pre>
-node clozza.js bench q
+node clozza.js u "p s" b bench q
 clang -o clozza other-options clozza.c
-./clozza bench q
+./clozza u "p s" b bench q
 </pre>
 
 Both results should be the same, but it's all WIP at the moment...
