@@ -2265,7 +2265,7 @@ function uciExec(e) {
       case 'uci': {
         //{{{  uci
         
-        uciSend('id name Lozza',BUILD);
+        uciSend('id name clozza',BUILD);
         uciSend('id author Colin Jenkins');
         uciSend('uciok');
         

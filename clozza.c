@@ -4,10 +4,9 @@
 #include <math.h>
 #include <string.h>
 #include <stdint.h>
-#include <assert.h>
 #include <sys/time.h>
 
-//{{{  misc
+/*{{{  misc*/
 
 #define uint8  uint8_t
 #define int16  int16_t
@@ -27,19 +26,17 @@ const int MATE = 32000;
 
 int mSilent = 0;
 
-//}}}
-//{{{  timing
+/*}}}*/
+/*{{{  timing*/
 
-move_t tBestMove = 0;
+int    tDone        = 0;
+int    tTargetDepth = 0;
+uint32 tTargetNodes = 0;
+uint32 tFinishTime  = 0;
+uint32 tNodes       = 0;
+move_t tBestMove    = 0;
 
-int tDone        = 0;
-int tNodes       = 0;
-int tTargetDepth = 0;
-int tTargetNodes = 0;
-
-uint32 tFinishTime = 0;
-
-//{{{  clock
+/*{{{  clock*/
 
 uint32 clock() {
 
@@ -50,19 +47,19 @@ uint32 clock() {
   return (uint32)(tv.tv_sec * 1000) + (uint32)(tv.tv_usec / 1000);
 }
 
-//}}}
-//{{{  areWeDone
+/*}}}*/
+/*{{{  areWeDone*/
 
 int areWeDone() {
   return tBestMove && ((tFinishTime && (clock() > tFinishTime)) || (tTargetNodes && (tNodes >= tTargetNodes)));
 }
 
-//}}}
+/*}}}*/
 
-//}}}
-//{{{  board/hash
+/*}}}*/
+/*{{{  board/hash*/
 
-//{{{  constants
+/*{{{  constants*/
 
 #define WHITE 0x0
 #define BLACK 0x8
@@ -284,7 +281,7 @@ const int CENTRE[] = {0, 0, 0, 0,  0,  0,  0,  0,  0,  0, 0, 0,
                       0, 0, 0, 0,  0,  0,  0,  0,  0,  0, 0, 0,
                       0, 0, 0, 0,  0,  0,  0,  0,  0,  0, 0, 0};
 
-//}}}
+/*}}}*/
 
 int bBoard[144];
 int bTurn     = 0;
@@ -307,7 +304,7 @@ uint32 hHiEP[144];
 uint32 hLoObj[16][144] = {0};
 uint32 hHiObj[16][144] = {0};
 
-//{{{  rand32
+/*{{{  rand32*/
 
 uint32 rand32 () {
 
@@ -318,8 +315,8 @@ uint32 rand32 () {
   return hSeed;
 }
 
-//}}}
-//{{{  hashInitOnce
+/*}}}*/
+/*{{{  hashInitOnce*/
 
 void hashInitOnce () {
 
@@ -348,8 +345,8 @@ void hashInitOnce () {
   }
 }
 
-//}}}
-//{{{  hashReset
+/*}}}*/
+/*{{{  hashReset*/
 
 void hashReset() {
 
@@ -357,40 +354,40 @@ void hashReset() {
   hHi = 0;
 }
 
-//}}}
-//{{{  hashTurn
+/*}}}*/
+/*{{{  hashTurn*/
 
 void hashTurn(int turn) {
   hLo ^= hLoTurn[turn];
   hHi ^= hHiTurn[turn];
 }
 
-//}}}
-//{{{  hashRights
+/*}}}*/
+/*{{{  hashRights*/
 
 void hashRights (int rights) {
   hLo ^= hLoRights[rights];
   hHi ^= hHiRights[rights];
 }
 
-//}}}
-//{{{  hashEP
+/*}}}*/
+/*{{{  hashEP*/
 
 void hashEP(int ep) {
   hLo ^= hLoEP[ep];
   hHi ^= hHiEP[ep];
 }
 
-//}}}
-//{{{  hashObj
+/*}}}*/
+/*{{{  hashObj*/
 
 void hashObj(int obj, int sq) {
   hLo ^= hLoObj[obj][sq];
   hHi ^= hHiObj[obj][sq];
 }
 
-//}}}
-//{{{  hashCalc
+/*}}}*/
+/*{{{  hashCalc*/
 
 void hashCalc() {
 
@@ -407,9 +404,9 @@ void hashCalc() {
   hashEP(bEP);
 }
 
-//}}}
+/*}}}*/
 
-//{{{  board primitives
+/*{{{  board primitives*/
 
 int objColour (int obj) {
   return obj & COLOUR_MASK;
@@ -435,8 +432,8 @@ int colourToggle (int c) {
   return ~c & COLOUR_MASK;
 }
 
-//}}}
-//{{{  printBoard
+/*}}}*/
+/*{{{  printBoard*/
 
 void printBoard () {
 
@@ -481,8 +478,8 @@ void printBoard () {
   printf("hash %u %u\n",hLo,hHi);
 }
 
-//}}}
-//{{{  position
+/*}}}*/
+/*{{{  position*/
 
 void position (char *sb, char *st, char *sr, char *sep) {
 
@@ -494,7 +491,7 @@ void position (char *sb, char *st, char *sr, char *sep) {
   for (int i=0; i < 64; i++)
     b[B88[i]] = 0;
 
-  //{{{  board board
+  /*{{{  board board*/
   
   int rank = 7;
   int file = 0;
@@ -506,7 +503,7 @@ void position (char *sb, char *st, char *sr, char *sep) {
     const int sq   = B88[sq88];
   
     switch (ch) {
-      //{{{  1-8
+      /*{{{  1-8*/
       
       case '1':
         file += 1;
@@ -532,16 +529,16 @@ void position (char *sb, char *st, char *sr, char *sep) {
       case '8':
         break;
       
-      //}}}
-      //{{{  /
+      /*}}}*/
+      /*{{{  /*/
       
       case '/':
         rank--;
         file = 0;
         break;
       
-      //}}}
-      //{{{  black
+      /*}}}*/
+      /*{{{  black*/
       
       case 'p':
         b[sq] = B_PAWN;
@@ -569,8 +566,8 @@ void position (char *sb, char *st, char *sr, char *sep) {
         file++;
         break;
       
-      //}}}
-      //{{{  white
+      /*}}}*/
+      /*{{{  white*/
       
       case 'P':
         b[sq] = W_PAWN;
@@ -598,12 +595,12 @@ void position (char *sb, char *st, char *sr, char *sep) {
         file++;
         break;
       
-      //}}}
+      /*}}}*/
     }
   }
   
-  //}}}
-  //{{{  board turn
+  /*}}}*/
+  /*{{{  board turn*/
   
   if (st[0] == 'w')
     bTurn = WHITE;
@@ -614,8 +611,8 @@ void position (char *sb, char *st, char *sr, char *sep) {
   else
     printf("unknown board colour %s\n", st);
   
-  //}}}
-  //{{{  board rights
+  /*}}}*/
+  /*{{{  board rights*/
   
   bRights = 0;
   
@@ -629,8 +626,8 @@ void position (char *sb, char *st, char *sr, char *sep) {
     if (ch == 'q') bRights |= BLACK_RIGHTS_QUEEN;
   }
   
-  //}}}
-  //{{{  board ep
+  /*}}}*/
+  /*{{{  board ep*/
   
   bEP = 0;
   
@@ -643,15 +640,15 @@ void position (char *sb, char *st, char *sr, char *sep) {
     }
   }
   
-  //}}}
+  /*}}}*/
 
   hashCalc();
 
   bPly = 0;
 }
 
-//}}}
-//{{{  isKingAttacked
+/*}}}*/
+/*{{{  isKingAttacked*/
 
 int isKingAttacked (int to, int byCol) {
 
@@ -668,13 +665,13 @@ int isKingAttacked (int to, int byCol) {
 
   int fr = 0;
 
-  //{{{  pawns
+  /*{{{  pawns*/
   
   if (b[to+OFFSET_DIAG1] == BY_PAWN || b[to+OFFSET_DIAG2] == BY_PAWN)
     return 1;
   
-  //}}}
-  //{{{  knights
+  /*}}}*/
+  /*{{{  knights*/
   
   if ((b[to + -10] == N) ||
       (b[to + -23] == N) ||
@@ -685,8 +682,8 @@ int isKingAttacked (int to, int byCol) {
       (b[to +  14] == N) ||
       (b[to +  25] == N)) return 1;
   
-  //}}}
-  //{{{  queen, bishop, rook
+  /*}}}*/
+  /*{{{  queen, bishop, rook*/
   
   fr = to + 1;  while (!b[fr]) fr += 1;  if (RQ[b[fr]]) return 1;
   fr = to - 1;  while (!b[fr]) fr -= 1;  if (RQ[b[fr]]) return 1;
@@ -698,16 +695,16 @@ int isKingAttacked (int to, int byCol) {
   fr = to + 13; while (!b[fr]) fr += 13; if (BQ[b[fr]]) return 1;
   fr = to - 13; while (!b[fr]) fr -= 13; if (BQ[b[fr]]) return 1;
   
-  //}}}
+  /*}}}*/
 
   return 0;
 }
 
 
-//}}}
+/*}}}*/
 
-//}}}
-//{{{  tt
+/*}}}*/
+/*{{{  tt*/
 
 #define TT_SIZE  (1 << 20)
 #define TT_MASK  ((TT_SIZE) - 1)
@@ -748,10 +745,10 @@ uint32 ttIndex () {
     return 0;
 }
 
-//}}}
-//{{{  eval
+/*}}}*/
+/*{{{  eval*/
 
-//{{{  constants
+/*{{{  constants*/
 
 int MATERIAL[] = {100,320,330,500,900,20000};
 
@@ -861,9 +858,9 @@ int *BLACK_END_PST[] = {BPAWN_PST, BKNIGHT_PST, BBISHOP_PST, BROOK_PST, BQUEEN_P
 int **WB_MID_PST[] = {WHITE_MID_PST, BLACK_MID_PST};
 int **WB_END_PST[] = {WHITE_END_PST, BLACK_END_PST};
 
-//}}}
+/*}}}*/
 
-//{{{  evaluate
+/*{{{  evaluate*/
 
 int evaluate () {
 
@@ -905,16 +902,16 @@ int evaluate () {
     return (e + pst_end) * cx;
 }
 
-//}}}
-//{{{  flip
+/*}}}*/
+/*{{{  flip*/
 
 int flip (int sq) {
   const int m = (143-sq)/12;
   return 12*m + sq%12;
 }
 
-//}}}
-//{{{  evalInitOnce
+/*}}}*/
+/*{{{  evalInitOnce*/
 
 void evalInitOnce () {
 
@@ -933,12 +930,12 @@ void evalInitOnce () {
 
 }
 
-//}}}
+/*}}}*/
 
-//}}}
-//{{{  cache
+/*}}}*/
+/*{{{  cache*/
 
-//{{{  cacheStruct
+/*{{{  cacheStruct*/
 
 struct cacheStruct {
 
@@ -949,11 +946,11 @@ struct cacheStruct {
   uint32 hHi;
 };
 
-//}}}
+/*}}}*/
 
 struct cacheStruct cache[MAX_PLY];
 
-//{{{  cacheSave
+/*{{{  cacheSave*/
 
 void cacheSave () {
 
@@ -965,8 +962,8 @@ void cacheSave () {
   c->hHi     = hHi;
 }
 
-//}}}
-//{{{  cacheUnsave
+/*}}}*/
+/*{{{  cacheUnsave*/
 
 void cacheUnsave () {
 
@@ -978,12 +975,12 @@ void cacheUnsave () {
   hHi     = c->hHi;
 }
 
-//}}}
+/*}}}*/
 
-//}}}
-//{{{  movelist
+/*}}}*/
+/*{{{  movelist*/
 
-//{{{  constants
+/*{{{  constants*/
 
 #define MAX_MOVES 250
 
@@ -1021,9 +1018,9 @@ void cacheUnsave () {
 #define BPRO (((BISHOP-2) << MOVE_PROMAS_BITS) | MOVE_PROMOTE_MASK)
 #define NPRO (((KNIGHT-2) << MOVE_PROMAS_BITS) | MOVE_PROMOTE_MASK)
 
-//}}}
+/*}}}*/
 
-//{{{  movelistStruct
+/*{{{  movelistStruct*/
 
 struct movelistStruct {
 
@@ -1040,11 +1037,11 @@ struct movelistStruct {
   int stage;
 };
 
-//}}}
+/*}}}*/
 
 struct movelistStruct movelist[MAX_PLY];
 
-//{{{  move primitives
+/*{{{  move primitives*/
 
 int moveFromSq (move_t move) {
   return (int)((move & MOVE_FR_MASK) >> MOVE_FR_BITS);
@@ -1066,9 +1063,9 @@ int movePromotePiece (move_t move) {
   return (int)(((move & MOVE_PROMAS_MASK) >> MOVE_PROMAS_BITS) + 2);
 }
 
-//}}}
+/*}}}*/
 
-//{{{  initMoveGen
+/*{{{  initMoveGen*/
 
 void initMoveGen (int noisy) {
 
@@ -1079,12 +1076,10 @@ void initMoveGen (int noisy) {
 
 }
 
-//}}}
-//{{{  addQuiet
+/*}}}*/
+/*{{{  addQuiet*/
 
 void addQuiet (move_t move) {
-
-  assert(move);
 
   struct movelistStruct *ml = &movelist[bPly];
 
@@ -1094,8 +1089,8 @@ void addQuiet (move_t move) {
   ml->quietNum = ml->quietNum + 1;
 }
 
-//}}}
-//{{{  addNoisy
+/*}}}*/
+/*{{{  addNoisy*/
 //
 // Must handle EP captures.
 //
@@ -1113,8 +1108,8 @@ void addNoisy (move_t move) {
   ml->noisyNum = ml->noisyNum + 1;
 }
 
-//}}}
-//{{{  genWhiteCastlingMoves
+/*}}}*/
+/*{{{  genWhiteCastlingMoves*/
 
 void genWhiteCastlingMoves () {
 
@@ -1140,8 +1135,8 @@ void genWhiteCastlingMoves () {
   }
 }
 
-//}}}
-//{{{  genBlackCastlingMoves
+/*}}}*/
+/*{{{  genBlackCastlingMoves*/
 
 void genBlackCastlingMoves () {
 
@@ -1167,8 +1162,8 @@ void genBlackCastlingMoves () {
   }
 }
 
-//}}}
-//{{{  genPawnMoves
+/*}}}*/
+/*{{{  genPawnMoves*/
 
 void genPawnMoves (move_t frMove) {
 
@@ -1198,8 +1193,8 @@ void genPawnMoves (move_t frMove) {
     addNoisy(frMove | (toObj << MOVE_TOOBJ_BITS) | to);
 }
 
-//}}}
-//{{{  genEnPassPawnMoves
+/*}}}*/
+/*{{{  genEnPassPawnMoves*/
 
 void genEnPassPawnMoves (move_t frMove) {
 
@@ -1221,8 +1216,8 @@ void genEnPassPawnMoves (move_t frMove) {
     addNoisy(frMove | to | MOVE_EPTAKE_MASK);
 }
 
-//}}}
-//{{{  genHomePawnMoves
+/*}}}*/
+/*{{{  genHomePawnMoves*/
 
 void genHomePawnMoves (move_t frMove) {
 
@@ -1256,8 +1251,8 @@ void genHomePawnMoves (move_t frMove) {
     addNoisy(frMove | (toObj << MOVE_TOOBJ_BITS) | to);
 }
 
-//}}}
-//{{{  genPromotePawnMoves
+/*}}}*/
+/*{{{  genPromotePawnMoves*/
 
 void genPromotePawnMoves (move_t frMove) {
 
@@ -1299,8 +1294,8 @@ void genPromotePawnMoves (move_t frMove) {
   }
 }
 
-//}}}
-//{{{  genKingMoves
+/*}}}*/
+/*{{{  genKingMoves*/
 
 void genKingMoves (move_t frMove) {
 
@@ -1331,8 +1326,8 @@ void genKingMoves (move_t frMove) {
   }
 }
 
-//}}}
-//{{{  genKnightMoves
+/*}}}*/
+/*{{{  genKnightMoves*/
 
 void genKnightMoves (move_t frMove) {
 
@@ -1357,8 +1352,8 @@ void genKnightMoves (move_t frMove) {
   }
 }
 
-//}}}
-//{{{  genBishopMoves
+/*}}}*/
+/*{{{  genBishopMoves*/
 
 void genBishopMoves (move_t frMove) {
 
@@ -1386,8 +1381,8 @@ void genBishopMoves (move_t frMove) {
   }
 }
 
-//}}}
-//{{{  genRookMoves
+/*}}}*/
+/*{{{  genRookMoves*/
 
 void genRookMoves (move_t frMove) {
 
@@ -1415,8 +1410,8 @@ void genRookMoves (move_t frMove) {
   }
 }
 
-//}}}
-//{{{  genQueenMoves
+/*}}}*/
+/*{{{  genQueenMoves*/
 
 void genQueenMoves (move_t frMove) {
 
@@ -1444,8 +1439,8 @@ void genQueenMoves (move_t frMove) {
   }
 }
 
-//}}}
-//{{{  genMoves
+/*}}}*/
+/*{{{  genMoves*/
 
 void genMoves () {
 
@@ -1516,8 +1511,8 @@ void genMoves () {
   }
 }
 
-//}}}
-//{{{  nextStagedMove
+/*}}}*/
+/*{{{  nextStagedMove*/
 
 move_t nextStagedMove (int next, int num, move_t *moves, int *ranks) {
 
@@ -1539,8 +1534,8 @@ move_t nextStagedMove (int next, int num, move_t *moves, int *ranks) {
   return maxM;
 }
 
-//}}}
-//{{{  getNextMove
+/*}}}*/
+/*{{{  getNextMove*/
 
 move_t getNextMove () {
 
@@ -1578,9 +1573,9 @@ move_t getNextMove () {
   }
 }
 
-//}}}
+/*}}}*/
 
-//{{{  makeIkkyMove
+/*{{{  makeIkkyMove*/
 
 void makeIkkyMove (move_t move) {
 
@@ -1591,7 +1586,7 @@ void makeIkkyMove (move_t move) {
   const int frCol = objColour(frObj);
 
   if (frCol == WHITE) {
-    //{{{  white
+    /*{{{  white*/
     
     if (move & MOVE_KINGMOVE_MASK)
     
@@ -1645,11 +1640,11 @@ void makeIkkyMove (move_t move) {
     
     }
     
-    //}}}
+    /*}}}*/
   }
 
   else {
-    //{{{  black
+    /*{{{  black*/
     
     if (move & MOVE_KINGMOVE_MASK)
     
@@ -1703,12 +1698,12 @@ void makeIkkyMove (move_t move) {
     
     }
     
-    //}}}
+    /*}}}*/
   }
 }
 
-//}}}
-//{{{  makeMove
+/*}}}*/
+/*{{{  makeMove*/
 
 void makeMove (move_t move) {
 
@@ -1745,8 +1740,8 @@ void makeMove (move_t move) {
   bPly++;
 }
 
-//}}}
-//{{{  unmakeIkkyMove
+/*}}}*/
+/*{{{  unmakeIkkyMove*/
 
 void unmakeIkkyMove (move_t move) {
 
@@ -1758,7 +1753,7 @@ void unmakeIkkyMove (move_t move) {
   const int frCol = objColour(frObj);
 
   if (frCol == WHITE) {
-    //{{{  white
+    /*{{{  white*/
     
     if (move & MOVE_KINGMOVE_MASK)
     
@@ -1784,11 +1779,11 @@ void unmakeIkkyMove (move_t move) {
     
     }
     
-    //}}}
+    /*}}}*/
   }
 
   else {
-    //{{{  black
+    /*{{{  black*/
     
     if (move & MOVE_KINGMOVE_MASK)
     
@@ -1814,12 +1809,12 @@ void unmakeIkkyMove (move_t move) {
     
     }
     
-    //}}}
+    /*}}}*/
   }
 }
 
-//}}}
-//{{{  unmakeMove
+/*}}}*/
+/*{{{  unmakeMove*/
 
 void unmakeMove (move_t move) {
 
@@ -1840,19 +1835,79 @@ void unmakeMove (move_t move) {
   bPly--;
 }
 
-//}}}
+/*}}}*/
 
-//}}}
-//{{{  search
+/*{{{  formatMove*/
 
-//{{{  newGame
+char *formatMove (move_t move) {
+
+  static char nm[5] = "nullm";
+  static char fm[5];
+
+  if (!move)
+    return nm;
+
+  const int fr = moveFromSq(move);
+  const int to = moveToSq(move);
+
+  //const int frObj = moveFromObj(move);
+  //const int toObj = moveToObj(move);
+
+  const char *frCoord = COORDS[fr];
+  const char *toCoord = COORDS[to];
+
+  //const int frPiece  = objPiece(frObj);
+  //const int frCol    = objColour(frObj);
+  //const char frName  = OBJ_CHAR[frObj];
+
+  //const int toPiece  = objPiece(toObj);
+  //const int toCol    = objColour(toObj);
+  //const char toName  = OBJ_CHAR[toObj];
+
+  const char pro = (move & MOVE_PROMOTE_MASK) ? OBJ_CHAR[movePromotePiece(move)|BLACK] : '\0';
+
+  fm[0] = frCoord[0];
+  fm[1] = frCoord[1];
+  fm[2] = toCoord[0];
+  fm[3] = toCoord[1];
+  fm[4] = pro;
+
+  return fm;
+}
+
+/*}}}*/
+/*{{{  playMove*/
+
+void playMove (char *uciMove) {
+
+  initMoveGen(ALL_MOVES);
+
+  move_t move = 0;
+
+  while ((move = getNextMove())) {
+
+    if (!strcmp(formatMove(move),uciMove)) {
+      makeMove(move);
+      return;
+    }
+  }
+
+  printf("cannot play uci move %s\n", uciMove);
+}
+
+/*}}}*/
+
+/*}}}*/
+/*{{{  search*/
+
+/*{{{  newGame*/
 
 void newGame () {
   ttInit();
 }
 
-//}}}
-//{{{  perft
+/*}}}*/
+/*{{{  perft*/
 
 uint32 perft (int depth) {
 
@@ -1874,14 +1929,14 @@ uint32 perft (int depth) {
     makeMove(move);
 
     if (isKingAttacked(bKings[cx], nextTurn)) {
-      //{{{  illegal move
+      /*{{{  illegal move*/
       
       unmakeMove(move);
       cacheUnsave();
       
       continue;
       
-      //}}}
+      /*}}}*/
     }
 
     count += perft(depth-1);
@@ -1893,12 +1948,12 @@ uint32 perft (int depth) {
   return count;
 }
 
-//}}}
-//{{{  qsearch
+/*}}}*/
+/*{{{  qsearch*/
 
-int qsearch (alpha, beta, depth) {
+int qsearch (int alpha, int beta, int depth) {
 
-  //{{{  housekeeping
+  /*{{{  housekeeping*/
   
   tNodes++;
   
@@ -1909,9 +1964,9 @@ int qsearch (alpha, beta, depth) {
     return evaluate();
   }
   
-  //}}}
+  /*}}}*/
 
-  //{{{  check TT
+  /*{{{  check TT*/
   
   const int i = ttIndex();
   
@@ -1921,7 +1976,7 @@ int qsearch (alpha, beta, depth) {
     }
   }
   
-  //}}}
+  /*}}}*/
 
   const int e = evaluate();
 
@@ -1948,14 +2003,14 @@ int qsearch (alpha, beta, depth) {
     makeMove(move);
 
     if (isKingAttacked(bKings[cx], nextTurn)) {
-      //{{{  illegal move
+      /*{{{  illegal move*/
       
       unmakeMove(move);
       cacheUnsave();
       
       continue;
       
-      //}}}
+      /*}}}*/
     }
 
     played++;
@@ -1979,12 +2034,12 @@ int qsearch (alpha, beta, depth) {
   return alpha;
 }
 
-//}}}
-//{{{  search
+/*}}}*/
+/*{{{  search*/
 
 int search (int alpha, int beta, int depth) {
 
-  //{{{  housekeeping
+  /*{{{  housekeeping*/
   
   tNodes++;
   
@@ -1995,7 +2050,7 @@ int search (int alpha, int beta, int depth) {
     return 0;
   }
   
-  //}}}
+  /*}}}*/
 
   const int turn     = bTurn;
   const int nextTurn = colourToggle(turn);
@@ -2009,7 +2064,7 @@ int search (int alpha, int beta, int depth) {
 
   const int pvNode = alpha != (beta - 1);
 
-  //{{{  check TT
+  /*{{{  check TT*/
   
   const int i = ttIndex();
   
@@ -2021,7 +2076,7 @@ int search (int alpha, int beta, int depth) {
     }
   }
   
-  //}}}
+  /*}}}*/
 
   const int oAlpha   = alpha;
   const int rootNode = bPly == 0;
@@ -2041,14 +2096,14 @@ int search (int alpha, int beta, int depth) {
     makeMove(move);
 
     if (isKingAttacked(bKings[cx], nextTurn)) {
-      //{{{  illegal move
+      /*{{{  illegal move*/
       
       unmakeMove(move);
       cacheUnsave();
       
       continue;
       
-      //}}}
+      /*}}}*/
     }
 
     played++;
@@ -2090,8 +2145,8 @@ int search (int alpha, int beta, int depth) {
   return bestScore;
 }
 
-//}}}
-//{{{  go
+/*}}}*/
+/*{{{  go*/
 
 void go () {
 
@@ -2125,20 +2180,20 @@ void go () {
         break;
 
       if (score > alpha && score < beta) {
-        //hackuciSend('info', 'depth', depth, 'nodes', tNodes, 'score', score, 'pv', formatMove(tBestMove));
+        printf("info depth %d nodes %u score %d pv %s\n", depth, tNodes, score, formatMove(tBestMove));
         break;
       }
 
       delta += delta / 2;
 
       if (score <= alpha) {
-        //hackuciSend('info', 'depth', depth, 'nodes', tNodes, 'lowerbound', score);
+        printf("info depth %d nodes %u lowerbound %d\n", depth, tNodes, score);
         beta  = MIN(MATE, ((alpha + beta) / 2));
         alpha = MAX(-MATE, score - delta);
         tBestMove = 0;
       }
       else if (score >= beta) {
-        //hackuciSend('info', 'depth', depth, 'nodes', tNodes, 'upperbound', score);
+        printf("info depth %d nodes %u upperbound %d\n", depth, tNodes, score);
         alpha = MAX(-MATE, ((alpha + beta) / 2));
         beta  = MIN(MATE,  score + delta);
       }
@@ -2148,18 +2203,18 @@ void go () {
       break;
   }
 
-  //hackuciSend('bestmove', formatMove(tBestMove));
+  printf("bestmove %s\n", formatMove(tBestMove));
 }
 
-//}}}
+/*}}}*/
 
-//}}}
-//{{{  uci
+/*}}}*/
+/*{{{  uci*/
 
 #define MAX_LINE_LENGTH 8192
 #define MAX_TOKENS 8192
 
-//{{{  uciTokens
+/*{{{  uciTokens*/
 
 int uciTokens(int n, char **tokens) {
 
@@ -2167,39 +2222,186 @@ int uciTokens(int n, char **tokens) {
   char *sub = tokens[1];
 
   if (!strcmp(cmd,"position") || !strcmp(cmd,"p")) {
+    /*{{{  position*/
+    
     if (!strcmp(sub,"startpos") || !strcmp(sub,"s")) {
+    
       position("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR", "w", "KQkq", "-");
+    
+      if (n > 2 && !strcmp(tokens[2],"moves")) {
+        for (int i=3; i < n; i++)
+          playMove(tokens[i]);
+      }
     }
-    if (!strcmp(sub,"fen")) {
+    
+    else if (!strcmp(sub,"fen")) {
+    
       position(tokens[2], tokens[3], tokens[4], tokens[5]);
+    
+      if (n > 8 && !strcmp(tokens[8],"moves")) {
+        for (int i=9; i < n; i++)
+          playMove(tokens[i]);
+      }
     }
+    
+    /*}}}*/
   }
 
   else if (!strcmp(cmd,"ucinewgame") || !strcmp(cmd,"u")) {
+    /*{{{  ucinewgame*/
+    
     newGame();
+    
+    /*}}}*/
+  }
+
+  else if (!strcmp(cmd,"isready")) {
+    /*{{{  isready*/
+    
+    printf("readyok\n");
+    
+    /*}}}*/
+  }
+
+  else if (!strcmp(cmd,"go") || !strcmp(cmd,"g")) {
+    /*{{{  go*/
+    
+    const int slop = 1;
+    
+    int wTime     = 0;
+    int bTime     = 0;
+    int wInc      = 0;
+    int bInc      = 0;
+    int moveTime  = 0;
+    int movesToGo = 0;
+    int depth     = 0;
+    
+    uint32 nodes = 0;
+    
+    int i = 1;
+    
+    while (i < n) {
+      /*{{{  go args*/
+      
+      if (!strcmp(tokens[i],"depth") || !strcmp(tokens[i],"d")) {
+        depth = atoi(tokens[i+1]);
+        i += 2;
+      }
+      
+      else if (!strcmp(tokens[i],"nodes")) {
+        nodes = atoi(tokens[i+1]);
+        i += 2;
+      }
+      
+      else if (!strcmp(tokens[i],"movestogo")) {
+        movesToGo = atoi(tokens[i+1]);
+        i += 2;
+      }
+      
+      else if (!strcmp(tokens[i],"movetime")) {
+        moveTime = atoi(tokens[i+1]);
+        i += 2;
+      }
+      
+      else if (!strcmp(tokens[i],"winc")) {
+        wInc = atoi(tokens[i+1]);
+        i += 2;
+      }
+      
+      else if (!strcmp(tokens[i],"binc")) {
+        bInc = atoi(tokens[i+1]);
+        i += 2;
+      }
+      
+      else if (!strcmp(tokens[i],"wtime")) {
+        wTime = atoi(tokens[i+1]);
+        i += 2;
+      }
+      
+      else if (!strcmp(tokens[i],"btime")) {
+        bTime = atoi(tokens[i+1]);
+        i += 2;
+      }
+      
+      else {
+        printf("unknown go token %s\n", tokens[i]);
+        i++;
+      }
+      
+      /*}}}*/
+    }
+    
+    if (depth)
+      tTargetDepth = depth;
+    else
+      tTargetDepth = MAX_PLY - 1;
+    
+    if (nodes)
+      tTargetNodes = nodes;
+    else
+      tTargetNodes = 0;
+    
+    if (moveTime > 0)
+      tFinishTime = clock() + moveTime + slop;
+    
+    else {
+    
+      if (movesToGo)
+        movesToGo += 2;
+      else
+        movesToGo = 30;
+    
+      if (wTime && bTurn == WHITE)
+        tFinishTime = clock() + 0.95 * (wTime/movesToGo + wInc) + slop;
+      else if (bTime && bTurn == BLACK)
+        tFinishTime = clock() + 0.95 * (bTime/movesToGo + bInc) + slop;
+      else
+        tFinishTime = 0;
+    }
+    
+    go();
+    
+    /*}}}*/
   }
 
   else if (!strcmp(cmd,"uci")) {
+    /*{{{  uci*/
+    
     printf("id name clozza 1\n");
     printf("id author Colin Jenkins\n");
     printf("uciok\n");
+    
+    /*}}}*/
   }
 
   else if (!strcmp(cmd,"b")) {
+    /*{{{  b*/
+    
     printBoard();
+    
+    /*}}}*/
   }
 
   else if (!strcmp(cmd,"e")) {
+    /*{{{  e*/
+    
     const int e = evaluate();
+    
     printf("%d\n",e);
+    
+    /*}}}*/
   }
 
   else if (!strcmp(cmd,"q")) {
+    /*{{{  q*/
+    
     return 1;
+    
+    /*}}}*/
   }
 
   else if (!strcmp(cmd,"perft")) {
-    //{{{  perft
+    /*{{{  perft*/
     
     const int depth     = atoi(sub);
     const uint32 t      = clock();
@@ -2207,13 +2409,13 @@ int uciTokens(int n, char **tokens) {
     
     printf("%u moves %u ms\n", pmoves, clock()-t);
     
-    //}}}
+    /*}}}*/
   }
 
   else if (!strcmp(cmd,"pt")) {
-    //{{{  perft tests
+    /*{{{  pt*/
     
-    //{{{  testfens
+    /*{{{  testfens*/
     
     typedef struct {
       char   *fen;
@@ -2292,9 +2494,9 @@ int uciTokens(int n, char **tokens) {
       {"r6r/1P4P1/2kPPP2/8/8/3ppp2/1p4p1/R3K2R",                 "w", "KQ",   "-",  6, 975944981, "ob5       "}
     };
     
-    //}}}
+    /*}}}*/
     
-    uint32 t1, t2, tmoves, pmoves, err, errs = 0;
+    uint32 t1, t2, tmoves = 0, pmoves, err, errs = 0;
     int sec;
     
     t1 = clock();
@@ -2321,13 +2523,13 @@ int uciTokens(int n, char **tokens) {
     
     printf("%d sec, %u nodes, %u errors\n",sec,tmoves,errs);
     
-    //}}}
+    /*}}}*/
   }
 
   else if (!strcmp(cmd,"bench")) {
-    //{{{  bench
+    /*{{{  bench*/
     
-    //{{{  bench fens
+    /*{{{  bench fens*/
     
     typedef struct {
       char   *fen;
@@ -2389,7 +2591,7 @@ int uciTokens(int n, char **tokens) {
       {"2r2b2/5p2/5k2/p1r1pP2/P2pB3/1P3P2/K1P3R1/7R", "w", "-", "-"}
     };
     
-    //}}}
+    /*}}}*/
     
     mSilent = 1;
     
@@ -2418,7 +2620,7 @@ int uciTokens(int n, char **tokens) {
     
     printf("%d %u\n",sec,nodes);
     
-    //}}}
+    /*}}}*/
   }
 
   else {
@@ -2428,8 +2630,8 @@ int uciTokens(int n, char **tokens) {
   return 0;
 }
 
-//}}}
-//{{{  uciExec
+/*}}}*/
+/*{{{  uciExec*/
 
 int uciExec (char *line) {
 
@@ -2450,33 +2652,39 @@ int uciExec (char *line) {
   return uciTokens(num_tokens, tokens);
 }
 
-//}}}
+/*}}}*/
 
-//}}}
+/*}}}*/
 
 int main(int argc, char **argv) {
+
+  FILE *fp;
+  fp = fopen ("log", "w");
+  fprintf(fp, "alive\n");
+  fclose(fp);
 
   char chunk[MAX_LINE_LENGTH];
 
   hashInitOnce();
   evalInitOnce();
 
-  //{{{  exec args
+  /*{{{  exec args*/
   
   for (int i=1; i < argc; i++) {
     if (uciExec(argv[i]))
       return 0;
   }
   
-  //}}}
-  //{{{  exec stdio
+  /*}}}*/
+  /*{{{  exec stdio*/
   
   while (fgets(chunk, sizeof(chunk), stdin) != NULL) {
+  
     if (uciExec(chunk))
       return 0;
   }
   
-  //}}}
+  /*}}}*/
 
   return 0;
 }
