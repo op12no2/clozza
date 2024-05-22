@@ -5,11 +5,11 @@ clozza.js is a simplified version of my Javascript chess engine Lozza.
 clozza.c is a line-for-line hand-crafted translation of clozza.js into C.  
 
 <pre>
-            search tests       perft tests
-            nodes     sec      nodes      sec
+                search tests       perft tests
+                nodes     sec      nodes      sec
 
-  lozza     51786380  29       290696716  760
-  clozza    51786380  8        290696716  234
+  clozza.js     51786380  29       290696716  760
+  clozza.c      51786380  8        290696716  234
  
 </pre>
 
