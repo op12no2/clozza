@@ -2294,7 +2294,7 @@ int uciTokens(int n, char **tokens) {
     
     //}}}
     
-    uint32 t1, t2, pmoves, err, errs = 0;
+    uint32 t1, t2, tmoves, pmoves, err, errs = 0;
     int sec;
     
     t1 = clock();
@@ -2307,7 +2307,8 @@ int uciTokens(int n, char **tokens) {
       pmoves = perft(pFens[i].depth);
       err    = pmoves - pFens[i].moves;
     
-      errs += err;
+      errs   += err;
+      tmoves += pmoves;
     
       t2  = clock();
       sec = round((t2-t1)/100)/10;
@@ -2318,7 +2319,7 @@ int uciTokens(int n, char **tokens) {
     t2  = clock();
     sec = round((t2-t1)/100)/10;
     
-    printf("%d sec, %u perft errors\n",sec,errs);
+    printf("%d sec, %u nodes, %u errors\n",sec,tmoves,errs);
     
     //}}}
   }
