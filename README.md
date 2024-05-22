@@ -6,10 +6,10 @@ clozza.c is a line-for-line hand-crafted translation of clozza.js into C.
 
 <pre>
             search tests       perft tests
-            nodes     sec      nodes       sec
+            nodes     sec      nodes      sec
 
-  lozza     51786380  29       1206448244  760
-  clozza    51786380  8        1206448244  234
+  lozza     51786380  29       290696716  760
+  clozza    51786380  8        290696716  234
  
 </pre>
 
