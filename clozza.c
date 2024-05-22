@@ -2496,7 +2496,8 @@ int uciTokens(int n, char **tokens) {
     
     /*}}}*/
     
-    uint32 t1, t2, tmoves = 0, pmoves, err, errs = 0;
+    uint64 tmoves = 0;
+    uint32 t1, t2, pmoves, err, errs = 0;
     int sec;
     
     t1 = clock();
@@ -2521,7 +2522,7 @@ int uciTokens(int n, char **tokens) {
     t2  = clock();
     sec = round((t2-t1)/100)/10;
     
-    printf("%d sec, %u nodes, %u errors\n",sec,tmoves,errs);
+    printf("%d sec, %lu nodes, %u errors\n",sec,tmoves,errs);
     
     /*}}}*/
   }
@@ -2658,10 +2659,7 @@ int uciExec (char *line) {
 
 int main(int argc, char **argv) {
 
-  FILE *fp;
-  fp = fopen ("log", "w");
-  fprintf(fp, "alive\n");
-  fclose(fp);
+  setvbuf(stdout, NULL, _IONBF, 0);
 
   char chunk[MAX_LINE_LENGTH];
 
@@ -2688,4 +2686,5 @@ int main(int argc, char **argv) {
 
   return 0;
 }
+
 
