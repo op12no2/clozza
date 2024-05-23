@@ -1780,6 +1780,8 @@ function position (sb, st, sr, sep) {
 
 function playMove (uciMove) {
 
+  bPly = 0;
+
   initMoveGen(ALL_MOVES);
 
   var move = 0;

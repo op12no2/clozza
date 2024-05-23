@@ -609,7 +609,7 @@ void position (char *sb, char *st, char *sr, char *sep) {
     bTurn = BLACK;
   
   else
-    printf("unknown board colour %s\n", st);
+    fprintf(stderr,"unknown board colour %s\n", st);
   
   /*}}}*/
   /*{{{  board rights*/
@@ -1841,8 +1841,8 @@ void unmakeMove (move_t move) {
 
 char *formatMove (move_t move) {
 
-  static char nm[5] = "nullm";
-  static char fm[5];
+  static char nm[6] = "nullm";
+  static char fm[6];
 
   if (!move)
     return nm;
@@ -1850,27 +1850,21 @@ char *formatMove (move_t move) {
   const int fr = moveFromSq(move);
   const int to = moveToSq(move);
 
-  //const int frObj = moveFromObj(move);
-  //const int toObj = moveToObj(move);
-
   const char *frCoord = COORDS[fr];
   const char *toCoord = COORDS[to];
-
-  //const int frPiece  = objPiece(frObj);
-  //const int frCol    = objColour(frObj);
-  //const char frName  = OBJ_CHAR[frObj];
-
-  //const int toPiece  = objPiece(toObj);
-  //const int toCol    = objColour(toObj);
-  //const char toName  = OBJ_CHAR[toObj];
-
-  const char pro = (move & MOVE_PROMOTE_MASK) ? OBJ_CHAR[movePromotePiece(move)|BLACK] : '\0';
 
   fm[0] = frCoord[0];
   fm[1] = frCoord[1];
   fm[2] = toCoord[0];
   fm[3] = toCoord[1];
-  fm[4] = pro;
+
+  if (move & MOVE_PROMOTE_MASK) {
+    fm[4] = OBJ_CHAR[movePromotePiece(move)|BLACK];  // sic
+    fm[5] = '\0';
+  }
+  else {
+    fm[4] = '\0';
+  }
 
   return fm;
 }
@@ -1879,6 +1873,8 @@ char *formatMove (move_t move) {
 /*{{{  playMove*/
 
 void playMove (char *uciMove) {
+
+  bPly = 0;
 
   initMoveGen(ALL_MOVES);
 
@@ -1892,7 +1888,7 @@ void playMove (char *uciMove) {
     }
   }
 
-  printf("cannot play uci move %s\n", uciMove);
+  fprintf(stderr,"cannot play uci move %s\n", uciMove);
 }
 
 /*}}}*/
@@ -2324,7 +2320,7 @@ int uciTokens(int n, char **tokens) {
       }
       
       else {
-        printf("unknown go token %s\n", tokens[i]);
+        fprintf(stderr,"unknown go token %s\n", tokens[i]);
         i++;
       }
       
@@ -2625,7 +2621,7 @@ int uciTokens(int n, char **tokens) {
   }
 
   else {
-    printf("?\n");
+    fprintf(stderr,"?\n");
   }
 
   return 0;
