@@ -1570,6 +1570,10 @@ move_t getNextMove () {
         return nextStagedMove(ml->nextMove++, ml->quietNum, ml->quietMoves, ml->quietRanks);
 
       return 0;
+
+    default:
+      fprintf(stderr,"get next move stage is %d\n",ml->stage);
+      return 0;
   }
 }
 
@@ -2186,7 +2190,7 @@ void go () {
         printf("info depth %d nodes %u lowerbound %d\n", depth, tNodes, score);
         beta  = MIN(MATE, ((alpha + beta) / 2));
         alpha = MAX(-MATE, score - delta);
-        tBestMove = 0;
+        //tBestMove = 0;
       }
       else if (score >= beta) {
         printf("info depth %d nodes %u upperbound %d\n", depth, tNodes, score);

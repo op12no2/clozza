@@ -1842,7 +1842,7 @@ function go () {
         uciSend('info', 'depth', depth, 'nodes', tNodes, 'lowerbound', score);
         beta  = Math.min(MATE, ((alpha + beta) / 2) | 0);
         alpha = Math.max(-MATE, score - delta);
-        tBestMove = 0;
+        //tBestMove = 0;
       }
       else if (score >= beta) {
         uciSend('info', 'depth', depth, 'nodes', tNodes, 'upperbound', score);
