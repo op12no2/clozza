@@ -16,8 +16,8 @@ Speed test results:-
                 search tests       perft tests
                 nodes     sec      nodes       sec
 
-  clozza.js     51786380  29       4585664012  760
-  clozza.c      51786380  8        4585664012  234
+  clozza.js     51851669  29       4585664012  760
+  clozza.c      51851669  8        4585664012  234
 </pre>
 
 Result of a match at 60+2:-
