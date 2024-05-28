@@ -303,6 +303,10 @@ uint32 hLoEP[144];
 uint32 hHiEP[144];
 uint32 hLoObj[16][144] = {0};
 uint32 hHiObj[16][144] = {0};
+uint32 hLoHistory[MAX_PLY];
+uint32 hHiHistory[MAX_PLY];
+
+int hHistoryLimit = 0;
 
 /*{{{  rand32*/
 
@@ -402,6 +406,26 @@ void hashCalc() {
   hashTurn(bTurn);
   hashRights(bRights);
   hashEP(bEP);
+}
+
+/*}}}*/
+/*{{{  hashIsDraw*/
+
+int hashIsDraw() {
+
+  if ((bPly - hHistoryLimit) > 100)
+    return 1;
+
+  int limit = bPly - 4;
+
+  while (limit >= hHistoryLimit) {
+    if (hLo == hLoHistory[limit] && hHi == hHiHistory[limit]) {
+      return 1;
+    }
+    limit -= 2;
+  }
+
+  return 0;
 }
 
 /*}}}*/
@@ -644,7 +668,8 @@ void position (char *sb, char *st, char *sr, char *sep) {
 
   hashCalc();
 
-  bPly = 0;
+  bPly          = 0;
+  hHistoryLimit = 0;
 }
 
 /*}}}*/
@@ -944,6 +969,8 @@ struct cacheStruct {
 
   uint32 hLo;
   uint32 hHi;
+
+  int hHistoryLimit;
 };
 
 /*}}}*/
@@ -956,10 +983,11 @@ void cacheSave () {
 
   struct cacheStruct *c = &cache[bPly];
 
-  c->bRights = bRights;
-  c->bEP     = bEP;
-  c->hLo     = hLo;
-  c->hHi     = hHi;
+  c->bRights       = bRights;
+  c->bEP           = bEP;
+  c->hLo           = hLo;
+  c->hHi           = hHi;
+  c->hHistoryLimit = hHistoryLimit;
 }
 
 /*}}}*/
@@ -969,10 +997,11 @@ void cacheUnsave () {
 
   struct cacheStruct *c = &cache[bPly];
 
-  bRights = c->bRights;
-  bEP     = c->bEP;
-  hLo     = c->hLo;
-  hHi     = c->hHi;
+  bRights       = c->bRights;
+  bEP           = c->bEP;
+  hLo           = c->hLo;
+  hHi           = c->hHi;
+  hHistoryLimit = c->hHistoryLimit;
 }
 
 /*}}}*/
@@ -1007,6 +1036,7 @@ void cacheUnsave () {
 
 #define MOVE_CAPTURE_MASK (MOVE_TOOBJ_MASK | MOVE_EPTAKE_MASK)
 #define MOVE_IKKY_MASK    (MOVE_KINGMOVE_MASK | MOVE_CASTLE_MASK | MOVE_PROMOTE_MASK | MOVE_EPTAKE_MASK | MOVE_EPMAKE_MASK)
+#define MOVE_DRAW_MASK    (MOVE_TOOBJ_MASK | MOVE_CASTLE_MASK | MOVE_PROMOTE_MASK | MOVE_EPTAKE_MASK)
 
 #define MOVE_E1G1 (MOVE_KINGMOVE_MASK | MOVE_CASTLE_MASK | (W_KING << MOVE_FROBJ_BITS) | (E1 << MOVE_FR_BITS) | G1)
 #define MOVE_E1C1 (MOVE_KINGMOVE_MASK | MOVE_CASTLE_MASK | (W_KING << MOVE_FROBJ_BITS) | (E1 << MOVE_FR_BITS) | C1)
@@ -1578,6 +1608,39 @@ move_t getNextMove () {
 }
 
 /*}}}*/
+/*{{{  formatMove*/
+
+char *formatMove (move_t move) {
+
+  static char nm[6] = "nullm";
+  static char fm[6];
+
+  if (!move)
+    return nm;
+
+  const int fr = moveFromSq(move);
+  const int to = moveToSq(move);
+
+  const char *frCoord = COORDS[fr];
+  const char *toCoord = COORDS[to];
+
+  fm[0] = frCoord[0];
+  fm[1] = frCoord[1];
+  fm[2] = toCoord[0];
+  fm[3] = toCoord[1];
+
+  if (move & MOVE_PROMOTE_MASK) {
+    fm[4] = OBJ_CHAR[movePromotePiece(move)|BLACK];  // sic
+    fm[5] = '\0';
+  }
+  else {
+    fm[4] = '\0';
+  }
+
+  return fm;
+}
+
+/*}}}*/
 
 /*{{{  makeIkkyMove*/
 
@@ -1718,6 +1781,9 @@ void makeMove (move_t move) {
   const int frObj = moveFromObj(move);
   const int toObj = moveToObj(move);
 
+  hLoHistory[bPly] = hLo;
+  hHiHistory[bPly] = hHi;
+
   hashObj(frObj,fr);
   b[fr] = 0;
   hashObj(0,fr);
@@ -1742,6 +1808,10 @@ void makeMove (move_t move) {
     makeIkkyMove(move);
 
   bPly++;
+
+  if ((move & MOVE_DRAW_MASK) || objPiece(frObj) == PAWN) {
+    hHistoryLimit = bPly;
+  }
 }
 
 /*}}}*/
@@ -1841,39 +1911,6 @@ void unmakeMove (move_t move) {
 
 /*}}}*/
 
-/*{{{  formatMove*/
-
-char *formatMove (move_t move) {
-
-  static char nm[6] = "nullm";
-  static char fm[6];
-
-  if (!move)
-    return nm;
-
-  const int fr = moveFromSq(move);
-  const int to = moveToSq(move);
-
-  const char *frCoord = COORDS[fr];
-  const char *toCoord = COORDS[to];
-
-  fm[0] = frCoord[0];
-  fm[1] = frCoord[1];
-  fm[2] = toCoord[0];
-  fm[3] = toCoord[1];
-
-  if (move & MOVE_PROMOTE_MASK) {
-    fm[4] = OBJ_CHAR[movePromotePiece(move)|BLACK];  // sic
-    fm[5] = '\0';
-  }
-  else {
-    fm[4] = '\0';
-  }
-
-  return fm;
-}
-
-/*}}}*/
 /*{{{  playMove*/
 
 void playMove (char *uciMove) {
@@ -2078,6 +2115,9 @@ int search (int alpha, int beta, int depth) {
   
   /*}}}*/
 
+  if (hashIsDraw())
+    return 0;
+
   const int oAlpha   = alpha;
   const int rootNode = bPly == 0;
 
@@ -2180,20 +2220,23 @@ void go () {
         break;
 
       if (score > alpha && score < beta) {
-        printf("info depth %d nodes %u score %d pv %s\n", depth, tNodes, score, formatMove(tBestMove));
+        if (!mSilent)
+          printf("info depth %d nodes %u score %d pv %s\n", depth, tNodes, score, formatMove(tBestMove));
         break;
       }
 
       delta += delta / 2;
 
       if (score <= alpha) {
-        printf("info depth %d nodes %u lowerbound %d\n", depth, tNodes, score);
+        if (!mSilent)
+          printf("info depth %d nodes %u lowerbound %d\n", depth, tNodes, score);
         beta  = MIN(MATE, ((alpha + beta) / 2));
         alpha = MAX(-MATE, score - delta);
         //tBestMove = 0;
       }
       else if (score >= beta) {
-        printf("info depth %d nodes %u upperbound %d\n", depth, tNodes, score);
+        if (!mSilent)
+          printf("info depth %d nodes %u upperbound %d\n", depth, tNodes, score);
         alpha = MAX(-MATE, ((alpha + beta) / 2));
         beta  = MIN(MATE,  score + delta);
       }
@@ -2203,7 +2246,8 @@ void go () {
       break;
   }
 
-  printf("bestmove %s\n", formatMove(tBestMove));
+  if (!mSilent)
+    printf("bestmove %s\n", formatMove(tBestMove));
 }
 
 /*}}}*/
@@ -2686,5 +2730,4 @@ int main(int argc, char **argv) {
 
   return 0;
 }
-
 

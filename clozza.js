@@ -478,6 +478,7 @@ const MOVE_SPARE_MASK    = 0x80000000;
 
 const MOVE_CAPTURE_MASK = MOVE_TOOBJ_MASK | MOVE_EPTAKE_MASK;
 const MOVE_IKKY_MASK    = MOVE_KINGMOVE_MASK | MOVE_CASTLE_MASK | MOVE_PROMOTE_MASK | MOVE_EPTAKE_MASK | MOVE_EPMAKE_MASK;
+const MOVE_DRAW_MASK    = MOVE_TOOBJ_MASK | MOVE_CASTLE_MASK | MOVE_PROMOTE_MASK | MOVE_EPTAKE_MASK;
 
 const MOVE_E1G1 = MOVE_KINGMOVE_MASK | MOVE_CASTLE_MASK | (W_KING << MOVE_FROBJ_BITS) | (E1 << MOVE_FR_BITS) | G1;
 const MOVE_E1C1 = MOVE_KINGMOVE_MASK | MOVE_CASTLE_MASK | (W_KING << MOVE_FROBJ_BITS) | (E1 << MOVE_FR_BITS) | C1;
@@ -1038,17 +1039,21 @@ function genSliderMoves (frMove) {
 //}}}
 //{{{  hash
 
-const hSeed     = new Uint32Array(1);
-const hLo       = new Uint32Array(1);
-const hHi       = new Uint32Array(1);
-const hLoTurn   = new Uint32Array(9);
-const hHiTurn   = new Uint32Array(9);
-const hLoRights = new Uint32Array(16);
-const hHiRights = new Uint32Array(16);
-const hLoEP     = new Uint32Array(144);
-const hHiEP     = new Uint32Array(144);
-const hLoObj    = Array(16);
-const hHiObj    = Array(16);
+const hSeed      = new Uint32Array(1);
+const hLo        = new Uint32Array(1);
+const hHi        = new Uint32Array(1);
+const hLoTurn    = new Uint32Array(9);
+const hHiTurn    = new Uint32Array(9);
+const hLoRights  = new Uint32Array(16);
+const hHiRights  = new Uint32Array(16);
+const hLoEP      = new Uint32Array(144);
+const hHiEP      = new Uint32Array(144);
+const hLoObj     = Array(16);
+const hHiObj     = Array(16);
+const hLoHistory = new Uint32Array(MAX_PLY);
+const hHiHistory = new Uint32Array(MAX_PLY);
+
+var hHistoryLimit = 0;
 
 //{{{  rand
 
@@ -1159,6 +1164,26 @@ function hashObj(obj, sq) {
 }
 
 //}}}
+//{{{  hashIsDraw
+
+function hashIsDraw() {
+
+  if ((bPly - hHistoryLimit) > 100)
+    return 1;
+
+  var limit = bPly - 4;
+
+  while (limit >= hHistoryLimit) {
+    if (hLo[0] == hLoHistory[limit] && hHi[0] == hHiHistory[limit]) {
+      return 1;
+    }
+    limit -= 2
+  }
+
+  return 0;
+}
+
+//}}}
 
 //}}}
 //{{{  tt
@@ -1208,10 +1233,11 @@ function ttIndex () {
 
 function cacheStruct () {
 
-  this.bRights = 0;
-  this.bEP     = 0;
-  this.hLo     = new Uint32Array(1);
-  this.hHi     = new Uint32Array(1);
+  this.bRights       = 0;
+  this.bEP           = 0;
+  this.hLo           = new Uint32Array(1);
+  this.hHi           = new Uint32Array(1);
+  this.hHistoryLimit = 0
 }
 
 //}}}
@@ -1234,10 +1260,11 @@ function cacheSave () {
 
   const c = cache[bPly];
 
-  c.bRights = bRights;
-  c.bEP     = bEP;
-  c.hLo[0]  = hLo[0];
-  c.hHi[0]  = hHi[0];
+  c.bRights       = bRights;
+  c.bEP           = bEP;
+  c.hLo[0]        = hLo[0];
+  c.hHi[0]        = hHi[0];
+  c.hHistoryLimit = hHistoryLimit;
 }
 
 //}}}
@@ -1247,14 +1274,14 @@ function cacheUnsave () {
 
   const c = cache[bPly];
 
-  bRights = c.bRights;
-  bEP     = c.bEP;
-  hLo[0]  = c.hLo[0];
-  hHi[0]  = c.hHi[0];
+  bRights       = c.bRights;
+  bEP           = c.bEP;
+  hLo[0]        = c.hLo[0];
+  hHi[0]        = c.hHi[0];
+  hHistoryLimit = c.hHistoryLimit;
 }
 
 //}}}
-
 
 //}}}
 
@@ -1268,6 +1295,9 @@ function makeMove (move) {
   const to    = moveToSq(move);
   const frObj = moveFromObj(move);
   const toObj = moveToObj(move);
+
+  hLoHistory[bPly] = hLo[0];
+  hHiHistory[bPly] = hHi[0];
 
   hashObj(frObj,fr);
   b[fr] = 0;
@@ -1293,6 +1323,9 @@ function makeMove (move) {
     makeIkkyMove(move);
 
   bPly++;
+
+  if ((move & MOVE_DRAW_MASK) || objPiece(frObj) == PAWN)
+    hHistoryLimit = bPly;
 }
 
 //}}}
@@ -1772,7 +1805,9 @@ function position (sb, st, sr, sep) {
 
   hashCalc()
 
-  bPly = 0;
+  bPly          = 0;
+  hHistoryLimit = 0;
+
 }
 
 //}}}
@@ -1901,6 +1936,9 @@ function search (alpha, beta, depth) {
   }
   
   //}}}
+
+  if (hashIsDraw())
+    return 0;
 
   const oAlpha   = alpha;
   const rootNode = bPly == 0;
