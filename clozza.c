@@ -20,7 +20,7 @@
 
 #define len(s) ((int)strlen(s))
 
-#define MAX_PLY 100
+#define MAX_PLY 128
 
 const int MATE = 32000;
 
@@ -303,10 +303,11 @@ uint32 hLoEP[144];
 uint32 hHiEP[144];
 uint32 hLoObj[16][144] = {0};
 uint32 hHiObj[16][144] = {0};
-uint32 hLoHistory[MAX_PLY];
-uint32 hHiHistory[MAX_PLY];
+uint32 hLoHistory[MAX_PLY*5];
+uint32 hHiHistory[MAX_PLY*5];
 
-int hHistoryLimit = 0;
+int hHistoryOffset = 0;
+int hHistoryLimit  = 0;
 
 /*{{{  rand32*/
 
@@ -416,11 +417,13 @@ int hashIsDraw() {
   if ((bPly - hHistoryLimit) > 100)
     return 1;
 
-  int limit = bPly - 4;
+  int limit = bPly + hHistoryOffset - 4;
+  int count = 0;
 
   while (limit >= hHistoryLimit) {
     if (hLo == hLoHistory[limit] && hHi == hHiHistory[limit]) {
-      return 1;
+      if (++count == 2)
+        return 1;
     }
     limit -= 2;
   }
@@ -668,8 +671,9 @@ void position (char *sb, char *st, char *sr, char *sep) {
 
   hashCalc();
 
-  bPly          = 0;
-  hHistoryLimit = 0;
+  bPly           = 0;
+  hHistoryLimit  = 0;
+  hHistoryOffset = 0;
 }
 
 /*}}}*/
@@ -1011,7 +1015,7 @@ void cacheUnsave () {
 
 /*{{{  constants*/
 
-#define MAX_MOVES 250
+#define MAX_MOVES 256
 
 #define ALL_MOVES   0
 #define NOISY_MOVES 1
@@ -1781,8 +1785,8 @@ void makeMove (move_t move) {
   const int frObj = moveFromObj(move);
   const int toObj = moveToObj(move);
 
-  hLoHistory[bPly] = hLo;
-  hHiHistory[bPly] = hHi;
+  hLoHistory[bPly+hHistoryOffset] = hLo;
+  hHiHistory[bPly+hHistoryOffset] = hHi;
 
   hashObj(frObj,fr);
   b[fr] = 0;
@@ -1810,7 +1814,7 @@ void makeMove (move_t move) {
   bPly++;
 
   if ((move & MOVE_DRAW_MASK) || objPiece(frObj) == PAWN) {
-    hHistoryLimit = bPly;
+    hHistoryLimit = bPly+hHistoryOffset;
   }
 }
 
@@ -1915,8 +1919,6 @@ void unmakeMove (move_t move) {
 
 void playMove (char *uciMove) {
 
-  bPly = 0;
-
   initMoveGen(ALL_MOVES);
 
   move_t move = 0;
@@ -1925,6 +1927,7 @@ void playMove (char *uciMove) {
 
     if (!strcmp(formatMove(move),uciMove)) {
       makeMove(move);
+      hHistoryOffset++;
       return;
     }
   }
