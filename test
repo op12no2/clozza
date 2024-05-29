@@ -1,0 +1,29 @@
+#!/bin/bash
+
+rm clozza.log
+
+tc="tc=0/60+2"
+
+e1="-engine conf=c  $tc"
+e2="-engine conf=js $tc"
+
+threads=4
+
+m="-recover -concurrency $threads"
+
+t="-event soaktest -tournament round-robin -games 20000"
+
+r="-resign movecount=5 score=400"
+
+d="-draw movenumber=40 movecount=8 score=10"
+
+o="-repeat -srand $RANDOM -openings file=4moves_noob.epd format=epd order=random plies=16"
+
+s="-sprt elo0=0 elo1=5 alpha=0.05 beta=0.05"
+
+v="-ratinginterval 10"
+
+echo $e1 $e2 $t $r $d $o $v $m $s
+
+./cutechess-ob $e1 $e2 $t $r $d $o $f $v $m $s $1 | tee cutechess.log
+

@@ -1,0 +1,7 @@
+cp /mnt/c/projects/clozza/clozza.c .
+dos2unix clozza.c
+cp /mnt/c/projects/clozza/clozza.js .
+dos2unix clozza.js
+clang -g -O0 -fsanitize=address,undefined,leak -Wall -Wextra -DDEBUG -o clozza clozza.c
+
+
