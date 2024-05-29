@@ -452,7 +452,7 @@ function evalInitOnce () {
 
 //{{{  constants
 
-const MAX_PLY   = 128;
+const MAX_PLY   = 1024;
 const MAX_MOVES = 256;
 
 const ALL_MOVES   = 0
@@ -1050,8 +1050,8 @@ const hLoEP      = new Uint32Array(144);
 const hHiEP      = new Uint32Array(144);
 const hLoObj     = Array(16);
 const hHiObj     = Array(16);
-const hLoHistory = new Uint32Array(MAX_PLY*5);
-const hHiHistory = new Uint32Array(MAX_PLY*5);
+const hLoHistory = new Uint32Array(MAX_PLY);
+const hHiHistory = new Uint32Array(MAX_PLY);
 
 var hHistoryOffset = 0;
 var hHistoryLimit = 0;
@@ -1169,7 +1169,7 @@ function hashObj(obj, sq) {
 
 function hashIsDraw() {
 
-  if ((bPly - hHistoryLimit) > 100)
+  if ((bPly + hHistoryOffset - hHistoryLimit) > 100)
     return 1;
 
   var limit = bPly + hHistoryOffset - 4;

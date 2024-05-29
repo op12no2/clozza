@@ -20,7 +20,7 @@
 
 #define len(s) ((int)strlen(s))
 
-#define MAX_PLY 128
+#define MAX_PLY 1024
 
 const int MATE = 32000;
 
@@ -303,8 +303,8 @@ uint32 hLoEP[144];
 uint32 hHiEP[144];
 uint32 hLoObj[16][144] = {0};
 uint32 hHiObj[16][144] = {0};
-uint32 hLoHistory[MAX_PLY*5];
-uint32 hHiHistory[MAX_PLY*5];
+uint32 hLoHistory[MAX_PLY];
+uint32 hHiHistory[MAX_PLY];
 
 int hHistoryOffset = 0;
 int hHistoryLimit  = 0;
@@ -414,7 +414,7 @@ void hashCalc() {
 
 int hashIsDraw() {
 
-  if ((bPly - hHistoryLimit) > 100)
+  if ((bPly + hHistoryOffset - hHistoryLimit) > 100)
     return 1;
 
   int limit = bPly + hHistoryOffset - 4;
