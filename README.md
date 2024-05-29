@@ -2,7 +2,7 @@
 
 clozza.js is a simplified version of my Javascript chess engine Lozza.
 
-clozza.c is a line-for-line hand-crafted translation of clozza.js into C, including a 2 x 32 bit hash.  
+clozza.c is a hand-crafted translation of clozza.js into C, including a 2 x 32 bit hash.  
 
 Both sources are folded with "/\*{{{" and "/\*}}}"
 
