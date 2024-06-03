@@ -14,7 +14,7 @@ clozza.js was run with node v18.12, clozza.c was compiled with:-
 Speed test results:-
 <pre>
                 search tests       perft tests
-                nodes     sec      nodes       sec
+                nodes     sec      moves       sec
 
   clozza.js     51786380  29       4585664012  760
   clozza.c      51786380  8        4585664012  234
