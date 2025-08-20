@@ -1,7 +1,0 @@
-cp /mnt/c/projects/clozza/clozza.c .
-dos2unix clozza.c
-cp /mnt/c/projects/clozza/clozza.js .
-dos2unix clozza.js
-clang -O3 -flto -funroll-loops -ffast-math -fno-sanitize=bounds -g0 -o clozza clozza.c
-
-
