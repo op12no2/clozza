@@ -4,5 +4,10 @@ A C version of my Javascript chess engine [Lozza](https://github.com/op12no2/loz
 
 The only real difference is move generation: Lozza uses mailbox and Clozza uses magics generated at startup.
 
-WIP
+Both have a PERFT based cammand "pt" that exercises 64 FENs at various depths.  Current performance:-
+
+Lozza: 14M nps
+Clozza: 80M nps
+
+WIP, no releases yet...
 
