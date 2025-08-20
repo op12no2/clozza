@@ -8,4 +8,4 @@ Both have a PERFT based command "pt" that exercises 64 FENs at various depths.  
 
 WIP, no releases yet...
 
-NB: While the code is all in one file, both clozza.c and lozza.js are folded with ```/*{{{  fold name */``` and ```/*}}}*/```.
+The code is best read using a folding editor. Start/end folds are ```/*{{{  fold name */``` and ```/*}}}*/```.
