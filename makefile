@@ -8,7 +8,7 @@ CC := clang
 BUILD ?= release
 
 ifeq ($(BUILD),release)
-  CFLAGS := -O3 -flto -fno-exceptions -fomit-frame-pointer -march=x86-64-v3 -DNDEBUG
+  CFLAGS := -O3 -flto -march=native -DNDEBUG
   LDFLAGS := -flto -fuse-ld=lld
 else ifeq ($(BUILD),debug)
   CFLAGS := -O0 -g -Wall -Wextra
@@ -25,7 +25,7 @@ BIN := clozza
 all: $(BIN)
 
 $(BIN): $(SRC)
-	$(CC) $(CFLAGS) -march=native $< -o $@ $(LDFLAGS)
+	$(CC) $(CFLAGS) $< -o $@ $(LDFLAGS)
 
 clean:
 	rm -f $(BIN)

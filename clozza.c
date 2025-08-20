@@ -1,5 +1,5 @@
 
-#define VER "1"
+#define BUILD "8 not released"
 
 /*{{{  includes*/
 
@@ -12,6 +12,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <string.h>
 #include <stdint.h>
 #include <inttypes.h> // PRIu64 PRId64 PRIx64
@@ -377,37 +378,6 @@ static void print_bb(const uint64_t bb, const char *tag) {
 }
 
 /*}}}*/
-/*{{{  pp_move*/
-
-// hack use format_move
-
-static void pp_move(const uint32_t move) {
-
-  const char files[] = "abcdefgh";
-  const char ranks[] = "12345678";
-
-  int from = (move >> 6) & 0x3F;
-  int to   = move & 0x3F;
-
-  char buf[7];
-
-  buf[0] = files[from % 8];
-  buf[1] = ranks[from / 8];
-  buf[2] = files[to % 8];
-  buf[3] = ranks[to / 8];
-
-  buf[4] = ' ';
-
-  if (move & FLAG_CASTLE)
-    buf[5] = 'C';
-
-  buf[6] = '\0';
-
-  printf("%s\n", buf);
-
-}
-
-/*}}}*/
 /*{{{  format_move*/
 
 // hack pass string * in
@@ -438,6 +408,8 @@ static char *format_move(uint32_t move, char *buf) {
 
 /*}}}*/
 /*{{{  print_board*/
+
+static int32_t net_eval (uint8_t stm);
 
 static void print_board(const Position *pos) {
 
@@ -473,6 +445,7 @@ static void print_board(const Position *pos) {
   printf("stm=%d\n", pos->stm);
   printf("rights=%d\n", pos->rights);
   printf("ep=%d\n", pos->ep);
+  printf("e=%d\n", net_eval(pos->stm));
 
 }
 
@@ -487,6 +460,433 @@ static int find_token(char *token, int n, char **tokens) {
   }
 
   return -1;
+
+}
+
+/*}}}*/
+
+/*}}}*/
+/*{{{  net*/
+
+#define NET_I_SIZE 768
+#define NET_H1_SIZE 256
+#define NET_H1_SHIFT 8
+#define NET_QA 255
+#define NET_QB 64
+#define NET_QAB (NET_QA * NET_QB)
+#define NET_SCALE 400
+
+static int32_t net_h1_a[NET_H1_SIZE]              __attribute__((aligned(64)));  // us acc
+static int32_t net_h2_a[NET_H1_SIZE]              __attribute__((aligned(64)));  // them acc
+static int32_t net_h1_w[NET_I_SIZE * NET_H1_SIZE] __attribute__((aligned(64)));  // us weights
+static int32_t net_h2_w[NET_I_SIZE * NET_H1_SIZE] __attribute__((aligned(64)));  // them weights
+static int32_t net_h1_b[NET_H1_SIZE]              __attribute__((aligned(64)));
+static int32_t net_o_w [NET_H1_SIZE * 2]          __attribute__((aligned(64)));
+static int32_t net_o_b;
+
+static void (*ue_func)(void);
+static int ue_arg0;
+static int ue_arg1;
+static int ue_arg2;
+static int ue_arg3;
+static int ue_arg4;
+static int ue_arg5;
+
+#define NET_FILE "../lozza/nets/farm1/lozza-500/quantised.bin"
+
+/*{{{  base*/
+
+__attribute__((always_inline, hot))
+
+static inline int base(int piece, int sq) {
+  return (((piece << 6) | sq) << NET_H1_SHIFT);
+}
+
+/*}}}*/
+/*{{{  init_weights*/
+
+/*{{{  flip_index*/
+//
+// As defined by bullet.
+// https://github.com/jw1912/bullet/blob/main/docs/1-basics.md
+//
+
+static int flip_index(int index) {
+
+  int piece  = index / (64 * NET_H1_SIZE);
+  int square = (index / NET_H1_SIZE) % 64;
+  int h      = index % NET_H1_SIZE;
+
+  square ^= 56;
+  piece = (piece + 6) % 12;
+
+  return ((piece * 64) + square) * NET_H1_SIZE + h;
+
+}
+
+/*}}}*/
+/*{{{  read_file*/
+
+static uint8_t* read_file(const char* path, size_t* size_out) {
+
+    *size_out = 0;
+    FILE* f = fopen(path, "rb");
+
+    if (!f)
+      return NULL;
+
+    if (fseek(f, 0, SEEK_END) != 0) {
+      fclose(f);
+      return NULL;
+    }
+
+    long sz = ftell(f);
+    if (sz < 0) {
+      fclose(f);
+      return NULL;
+    }
+    rewind(f);
+
+    uint8_t* buf = (uint8_t*)malloc((size_t)sz);
+    if (!buf) {
+      fclose(f);
+      return NULL;
+    }
+
+    size_t got = fread(buf, 1, (size_t)sz, f);
+    fclose(f);
+    if (got != (size_t)sz) {
+      free(buf);
+      return NULL;
+    }
+
+    *size_out = (size_t)sz;
+
+    return buf;
+
+}
+
+/*}}}*/
+/*{{{  get_weights*/
+
+int get_weights(const char* path, int16_t** out, size_t* count_out) {
+
+  size_t bytes = 0;
+
+  uint8_t* raw = read_file(path, &bytes);
+  if (!raw)
+    return 0;
+
+  if (bytes % sizeof(int16_t) != 0) {
+    free(raw);
+    return 0;
+  }
+
+  int16_t* w = (int16_t*)raw;
+  size_t count = bytes / sizeof(int16_t);
+
+  *out = w;           // caller must free(*out)
+  *count_out = count; // number of int16 weights
+
+  return 1;
+
+}
+
+/*}}}*/
+
+static void init_weights() {
+
+  int16_t* weights = NULL;
+  size_t n = 0;
+
+  if (get_weights(NET_FILE, &weights, &n) == 0)
+    assert(0 && "cannot load weights");
+
+  size_t offset = 0;
+
+  for (int i=0; i < NET_I_SIZE * NET_H1_SIZE; i++) {
+    net_h1_w[i]             = (int32_t)weights[i];  // us
+    net_h2_w[flip_index(i)] = (int32_t)weights[i];  // them
+  }
+
+  offset += NET_I_SIZE * NET_H1_SIZE;
+  for (int i=0; i < NET_H1_SIZE; i++) {
+    net_h1_b[i] = (int32_t)weights[offset+i];
+  }
+
+  offset += NET_H1_SIZE;
+  for (int i=0; i < NET_H1_SIZE * 2; i++) {
+    net_o_w[i] = (int32_t)weights[offset+i];
+  }
+
+  offset += NET_H1_SIZE * 2;
+  net_o_b = (int32_t)weights[offset];
+
+  free(weights);
+
+}
+
+/*}}}*/
+/*{{{  net_eval*/
+
+__attribute__((always_inline, hot))
+
+static inline int32_t sqrelu(int32_t x) {
+  int32_t y = x & ~(x >> 31);
+  return y * y;
+}
+
+__attribute__((hot))
+
+static int32_t net_eval(uint8_t stm) {
+
+  const int32_t* __restrict a1 = (stm == 0 ? net_h1_a : net_h2_a);
+  const int32_t* __restrict a2 = (stm == 0 ? net_h2_a : net_h1_a);
+
+  const int32_t* __restrict w1 = &net_o_w[0];
+  const int32_t* __restrict w2 = &net_o_w[NET_H1_SIZE];
+
+  int64_t acc = 0;
+
+  #if defined(__clang__)
+  #pragma clang loop vectorize(enable) interleave(enable) unroll_count(8)
+  #elif defined(__GNUC__)
+  #pragma GCC ivdep
+  #pragma GCC unroll 8
+  #endif
+  for (int i=0; i < NET_H1_SIZE; i++) {
+    acc += (int64_t)w1[i] * sqrelu(a1[i])
+         + (int64_t)w2[i] * sqrelu(a2[i]);
+  }
+
+  acc /= NET_QA;
+  acc += net_o_b;
+  acc *= NET_SCALE;
+  acc /= NET_QAB;
+
+  return (int32_t)acc;
+
+}
+
+/*}}}*/
+/*{{{  net_move*/
+
+__attribute__((hot))
+
+static void net_move() {
+
+  const int fr_piece = ue_arg0;
+  const int fr       = ue_arg1;
+  const int to       = ue_arg2;
+
+  assert(fr != to && "would break aliases");
+
+  int32_t * __restrict a1 = &net_h1_a[0];
+  int32_t * __restrict a2 = &net_h2_a[0];
+
+  const int b1 = base(fr_piece, fr);
+  const int b2 = base(fr_piece, to);
+
+  const int32_t * __restrict w1_b1 = &net_h1_w[b1];
+  const int32_t * __restrict w1_b2 = &net_h1_w[b2];
+
+  const int32_t * __restrict w2_b1 = &net_h2_w[b1];
+  const int32_t * __restrict w2_b2 = &net_h2_w[b2];
+
+  #if defined(__clang__)
+  #pragma clang loop vectorize(enable) interleave(enable) unroll_count(8)
+  #elif defined(__GNUC__)
+  #pragma GCC ivdep
+  #pragma GCC unroll 8
+  #endif
+  for (int i=0; i < NET_H1_SIZE; i++) {
+    a1[i] += w1_b2[i] - w1_b1[i];
+    a2[i] += w2_b2[i] - w2_b1[i];
+  }
+
+}
+
+/*}}}*/
+/*{{{  net_capture*/
+
+__attribute__((hot))
+
+static void net_capture() {
+
+  const int fr_piece = ue_arg0;
+  const int fr       = ue_arg1;
+  const int to_piece = ue_arg2;
+  const int to       = ue_arg3;
+
+  assert(fr != to && "would break aliases");
+
+  int32_t * __restrict a1 = &net_h1_a[0];
+  int32_t * __restrict a2 = &net_h2_a[0];
+
+  const int b1 = base(fr_piece, fr);
+  const int b2 = base(to_piece, to);
+  const int b3 = base(fr_piece, to);
+
+  const int32_t * __restrict w1_b1 = &net_h1_w[b1];
+  const int32_t * __restrict w1_b2 = &net_h1_w[b2];
+  const int32_t * __restrict w1_b3 = &net_h1_w[b3];
+
+  const int32_t * __restrict w2_b1 = &net_h2_w[b1];
+  const int32_t * __restrict w2_b2 = &net_h2_w[b2];
+  const int32_t * __restrict w2_b3 = &net_h2_w[b3];
+
+  #if defined(__clang__)
+  #pragma clang loop vectorize(enable) interleave(enable) unroll_count(8)
+  #elif defined(__GNUC__)
+  #pragma GCC ivdep
+  #pragma GCC unroll 8
+  #endif
+  for (int i=0; i < NET_H1_SIZE; i++) {
+    a1[i] += w1_b3[i] - w1_b2[i] - w1_b1[i];
+    a2[i] += w2_b3[i] - w2_b2[i] - w2_b1[i];
+  }
+
+}
+
+/*}}}*/
+/*{{{  net_promote*/
+
+__attribute__((hot))
+
+static void net_promote () {
+
+  const int pawn_piece    = ue_arg0;
+  const int pawn_fr       = ue_arg1;
+  const int pawn_to       = ue_arg2;
+  const int capture_piece = ue_arg3;
+  const int promote_piece = ue_arg4;
+
+  assert(pawn_fr != pawn_to && "would break aliases");
+
+  int32_t * __restrict a1 = &net_h1_a[0];
+  int32_t * __restrict a2 = &net_h2_a[0];
+
+  const int b1 = base(pawn_piece, pawn_fr);
+  const int b2 = base(promote_piece, pawn_to);
+  const int b3 = base(capture_piece, pawn_to);
+
+  const int32_t * __restrict w1_b1 = &net_h1_w[b1];
+  const int32_t * __restrict w1_b2 = &net_h1_w[b2];
+  const int32_t * __restrict w1_b3 = &net_h1_w[b3];
+
+  const int32_t * __restrict w2_b1 = &net_h2_w[b1];
+  const int32_t * __restrict w2_b2 = &net_h2_w[b2];
+  const int32_t * __restrict w2_b3 = &net_h2_w[b3];
+
+  if (capture_piece != 0) {
+    #if defined(__clang__)
+    #pragma clang loop vectorize(enable) interleave(enable) unroll_count(8)
+    #elif defined(__GNUC__)
+    #pragma GCC ivdep
+    #pragma GCC unroll 8
+    #endif
+    for (int i=0; i < NET_H1_SIZE; i++) {
+      a1[i] += w1_b2[i] - w1_b1[i] - w1_b3[i];
+      a2[i] += w2_b2[i] - w2_b1[i] - w2_b3[i];
+    }
+  }
+  else {
+    #if defined(__clang__)
+    #pragma clang loop vectorize(enable) interleave(enable) unroll_count(8)
+    #elif defined(__GNUC__)
+    #pragma GCC ivdep
+    #pragma GCC unroll 8
+    #endif
+    for (int i=0; i < NET_H1_SIZE; i++) {
+      a1[i] += w1_b2[i] - w1_b1[i];
+      a2[i] += w2_b2[i] - w2_b1[i];
+    }
+  }
+
+}
+
+/*}}}*/
+/*{{{  net_ep_capture*/
+
+__attribute__((hot))
+
+static void net_ep_capture () {
+
+  const int pawn_piece         = ue_arg0;
+  const int pawn_fr            = ue_arg1;
+  const int pawn_to            = ue_arg2;
+  const int pawn_capture_piece = ue_arg3;
+  const int ep                 = ue_arg4;
+
+  int32_t * __restrict a1 = &net_h1_a[0];
+  int32_t * __restrict a2 = &net_h2_a[0];
+
+  const int b1 = base(pawn_piece,         pawn_fr);
+  const int b2 = base(pawn_piece,         pawn_to);
+  const int b3 = base(pawn_capture_piece, ep);
+
+  const int32_t * __restrict w1_b1 = &net_h1_w[b1];
+  const int32_t * __restrict w1_b2 = &net_h1_w[b2];
+  const int32_t * __restrict w1_b3 = &net_h1_w[b3];
+
+  const int32_t * __restrict w2_b1 = &net_h2_w[b1];
+  const int32_t * __restrict w2_b2 = &net_h2_w[b2];
+  const int32_t * __restrict w2_b3 = &net_h2_w[b3];
+
+  #if defined(__clang__)
+  #pragma clang loop vectorize(enable) interleave(enable) unroll_count(8)
+  #elif defined(__GNUC__)
+  #pragma GCC ivdep
+  #pragma GCC unroll 8
+  #endif
+  for (int i=0; i < NET_H1_SIZE; i++) {
+    a1[i] += w1_b2[i] - w1_b1[i] - w1_b3[i];
+    a2[i] += w2_b2[i] - w2_b1[i] - w2_b3[i];
+  }
+
+}
+
+
+/*}}}*/
+/*{{{  net_castle*/
+
+static void net_castle () {
+
+  const int king_piece = ue_arg0;
+  const int king_fr    = ue_arg1;
+  const int king_to    = ue_arg2;
+  const int rook_piece = ue_arg3;
+  const int rook_fr    = ue_arg4;
+  const int rook_to    = ue_arg5;
+
+  int32_t * __restrict a1 = &net_h1_a[0];
+  int32_t * __restrict a2 = &net_h2_a[0];
+
+  const int b1 = base(king_piece, king_fr);
+  const int b2 = base(king_piece, king_to);
+  const int b3 = base(rook_piece, rook_fr);
+  const int b4 = base(rook_piece, rook_to);
+
+  const int32_t * __restrict w1_b1 = &net_h1_w[b1];
+  const int32_t * __restrict w1_b2 = &net_h1_w[b2];
+  const int32_t * __restrict w1_b3 = &net_h1_w[b3];
+  const int32_t * __restrict w1_b4 = &net_h1_w[b4];
+
+  const int32_t * __restrict w2_b1 = &net_h2_w[b1];
+  const int32_t * __restrict w2_b2 = &net_h2_w[b2];
+  const int32_t * __restrict w2_b3 = &net_h2_w[b3];
+  const int32_t * __restrict w2_b4 = &net_h2_w[b4];
+
+  #if defined(__clang__)
+  #pragma clang loop vectorize(enable) interleave(enable) unroll_count(8)
+  #elif defined(__GNUC__)
+  #pragma GCC ivdep
+  #pragma GCC unroll 8
+  #endif
+  for (int i=0; i < NET_H1_SIZE; i++) {
+    a1[i] += w1_b2[i] - w1_b1[i] + w1_b4[i] - w1_b3[i];
+    a2[i] += w2_b2[i] - w2_b1[i] + w2_b4[i] - w2_b3[i];
+  }
 
 }
 
@@ -541,80 +941,98 @@ static inline void get_blockers(Attack *a, uint64_t *blockers) {
 /*}}}*/
 /*{{{  find_magics*/
 
-__attribute__((cold))
+static void find_magics(Attack attacks[64], const char* label, int verbose) {
 
-static void find_magics(Attack attacks[64], const char *label) {
-
-  int v = 0;
   int total_tries = 0;
 
-  if (v) {
-    printf("%-2s %3s %12s %5s %-18s %4s\n", "T", "Sq", "Tries", "Bits", "Magic", "Fill");
-    printf("-------------------------------------------------\n");
-  }
+  static uint64_t* tbl = NULL;
+  static unsigned* used = NULL;
+  static int cap = 0;
+  static unsigned stamp = 1;
 
   for (int sq = 0; sq < 64; sq++) {
 
-    Attack *a = &attacks[sq];
+    Attack* a = &attacks[sq];
 
     uint64_t blockers[a->count];
     get_blockers(a, blockers);
 
+    if (a->count > cap) {
+      free(tbl);
+      free(used);
+      cap = a->count;
+      tbl  = (uint64_t*)malloc((size_t)cap * sizeof(uint64_t));
+      used = (unsigned*)malloc((size_t)cap * sizeof(unsigned));
+      assert(tbl && used);
+      memset(used, 0, (size_t)cap * sizeof(unsigned));
+    }
+
     int tries = 0;
 
-    while (1) {
+    for (;;) {
 
       tries++;
+
+      if (++stamp == 0) {
+        memset(used, 0, (size_t)cap * sizeof(unsigned));
+        stamp = 1;
+      }
 
       uint64_t magic = xorshift64star() & xorshift64star() & xorshift64star();
 
       if (popcount((a->mask * magic) >> (64 - a->bits)) < a->bits - 2)
         continue;
 
-      uint64_t *attacks = calloc(a->count, sizeof(uint64_t));
-      if (!attacks) {
-        fprintf(stderr, "calloc failed for attacks[%d]\n", sq);
-        exit(1);
-      }
-
-      int fail = 0, populated = 0;
+      int fail = 0;
 
       for (int i = 0; i < a->count; i++) {
+
         uint64_t blocker = blockers[i];
-        uint64_t attack = a->attacks[i];
+        uint64_t attack  = a->attacks[i];
+
         int index = magic_index(blocker, magic, a->shift);
 
-        if (attacks[index] == 0) {
-          attacks[index] = attack;
-          populated++;
+        if (used[index] != stamp) {
+          used[index] = stamp;
+          tbl[index]  = attack;
         }
-
-        else if (attacks[index] != attack) {
+        else if (tbl[index] != attack) {
           fail = 1;
-          free(attacks);
           break;
         }
       }
 
       if (!fail) {
         a->magic = magic;
+
         free(a->attacks);
-        a->attacks = attacks;
-        if (v) {
-          int percent = (100 * populated) / a->count;
-          printf("%-2s %3d %12d %5d %016" PRIx64 " %5d%%\n",
-                 label, sq, tries, a->bits, magic, percent);
+        a->attacks = (uint64_t*)malloc((size_t)a->count * sizeof(uint64_t));
+        assert(a->attacks);
+
+        for (int i = 0; i < a->count; i++) {
+          a->attacks[i] = (used[i] == stamp) ? tbl[i] : 0ULL;
         }
+
+        if (verbose) {
+          printf("%s sq %2d tries %8d magic 0x%016llx\n",
+                 label, sq, tries, (unsigned long long)a->magic);
+        }
+
         total_tries += tries;
         break;
       }
     }
   }
 
-  if (v) {
-    printf("-------------------------------------------------\n");
-    printf("Total tries for %s: %d\n", label, total_tries);
+  if (verbose) {
+    printf("%s total_tries %d\n", label, total_tries);
   }
+
+  free(tbl);  tbl = NULL;
+  free(used); used = NULL;
+  cap = 0;
+
+  (void)label;
 
 }
 
@@ -753,7 +1171,7 @@ static void init_bishop_attacks(void) {
     }
   }
 
-  find_magics(bishop_attacks, "B");
+  find_magics(bishop_attacks, "B", 1);
 
 }
 
@@ -847,7 +1265,7 @@ static void init_rook_attacks(void) {
     }
   }
 
-  find_magics(rook_attacks, "R");
+  find_magics(rook_attacks, "R", 1);
 
 }
 
@@ -928,7 +1346,6 @@ static inline void gen_pawns_white_quiet(Node * __restrict node) {
   const Position *pos = &node->pos;
   const uint64_t pawns    = pos->all[WPAWN];
   const uint64_t occupied = pos->occupied;
-  const uint64_t enemies  = pos->colour[BLACK];
   uint32_t *m = node->moves + node->num_moves;
   int n = 0;
 
@@ -977,7 +1394,6 @@ static inline void gen_pawns_white_noisy(Node * __restrict node) {
 
   const Position *pos = &node->pos;
   const uint64_t pawns    = pos->all[WPAWN];
-  const uint64_t occupied = pos->occupied;
   const uint64_t enemies  = pos->colour[BLACK];
   uint32_t *m = node->moves + node->num_moves;
   int n = 0;
@@ -1052,7 +1468,6 @@ static inline void gen_pawns_black_quiet(Node * __restrict node) {
   const Position *pos = &node->pos;
   const uint64_t pawns    = pos->all[BPAWN];
   const uint64_t occupied = pos->occupied;
-  const uint64_t enemies  = pos->colour[WHITE];
   uint32_t *m = node->moves + node->num_moves;
   int n = 0;
 
@@ -1101,7 +1516,6 @@ static inline void gen_pawns_black_noisy(Node * __restrict node) {
 
   const Position *pos = &node->pos;
   const uint64_t pawns    = pos->all[BPAWN];
-  const uint64_t occupied = pos->occupied;
   const uint64_t enemies  = pos->colour[WHITE];
   uint32_t *m = node->moves + node->num_moves;
   int n = 0;
@@ -1316,7 +1730,6 @@ static void init_next_perft_move(Node * __restrict node, const uint8_t in_check)
   const int stm = pos->stm;
   const int opp = stm ^ 1;
   const uint64_t occ = pos->occupied;
-  //const uint64_t friends = pos->colour[stm];
   const uint64_t opp_king = pos->all[piece_index(KING, opp)];
   const uint64_t opp_king_near = king_attacks[bsf(opp_king)];
   const uint64_t enemies = pos->colour[opp] & ~opp_king;
@@ -1363,8 +1776,6 @@ static void init_next_qsearch_move(Node * __restrict node) {
   const Position *pos = &node->pos;
   const int stm = pos->stm;
   const int opp = stm ^ 1;
-  const uint64_t occ = pos->occupied;
-  //const uint64_t friends = pos->colour[stm];
   const uint64_t opp_king = pos->all[piece_index(KING, opp)];
   const uint64_t opp_king_near = king_attacks[bsf(opp_king)];
   const uint64_t enemies = pos->colour[opp] & ~opp_king;
@@ -1499,14 +1910,14 @@ static uint32_t get_next_search_move(Node * __restrict node) {
 
 static const int orth_offset[2] = {8, -8};
 
-static const uint8_t rook_to[64] = {
+static const int rook_to[64] = {
   [G1] = F1,
   [C1] = D1,
   [G8] = F8,
   [C8] = D8,
 };
 
-static const uint8_t rook_from[64] = {
+static const int rook_from[64] = {
   [G1] = H1,
   [C1] = A1,
   [G8] = H8,
@@ -1587,6 +1998,13 @@ static inline void make_move(Position * __restrict pos, const uint32_t move) {
       
       pos->board[to] = pro;
       
+      ue_func = net_promote;
+      
+      ue_arg0 = from_piece;
+      ue_arg1 = from;
+      ue_arg2 = to_piece;
+      ue_arg3 = pro;
+      
       /*}}}*/
     }
     
@@ -1595,10 +2013,19 @@ static inline void make_move(Position * __restrict pos, const uint32_t move) {
       
       const int pawn_sq = to + orth_offset[opp];
       const uint64_t pawn_bb = 1ULL << pawn_sq;
+      const int opp_pawn = piece_index(PAWN, opp);
       
-      pos->all[piece_index(PAWN, opp)] &= ~pawn_bb;
+      pos->all[opp_pawn] &= ~pawn_bb;
       pos->colour[opp] &= ~pawn_bb;
       pos->board[pawn_sq] = EMPTY;
+      
+      ue_func = net_ep_capture;
+      
+      ue_arg0 = from_piece;
+      ue_arg1 = from;
+      ue_arg2 = to;
+      ue_arg3 = opp_pawn;
+      ue_arg4 = pos->ep;
       
       /*}}}*/
     }
@@ -1608,6 +2035,12 @@ static inline void make_move(Position * __restrict pos, const uint32_t move) {
       
       pos->ep = from + orth_offset[stm];
       
+      ue_func = net_move;
+      
+      ue_arg0 = from_piece;
+      ue_arg1 = from;
+      ue_arg2 = to;
+      
       /*}}}*/
     }
     
@@ -1616,20 +2049,54 @@ static inline void make_move(Position * __restrict pos, const uint32_t move) {
       
       const int rook = piece_index(ROOK, stm);
       
-      uint64_t rook_from_bb = 1ULL << rook_from[to];
-      uint64_t rook_to_bb   = 1ULL << rook_to[to];
+      const uint64_t rook_from_bb = 1ULL << rook_from[to];
+      const uint64_t rook_to_bb   = 1ULL << rook_to[to];
+      
+      const int rook_from_sq = rook_from[to];
+      const int rook_to_sq   = rook_to[to];
       
       pos->all[rook]   &= ~rook_from_bb;
       pos->colour[stm] &= ~rook_from_bb;
-      pos->board[rook_from[to]] = EMPTY;
+      pos->board[rook_from_sq] = EMPTY;
       
       pos->all[rook]   |= rook_to_bb;
       pos->colour[stm] |= rook_to_bb;
-      pos->board[rook_to[to]] = rook;
+      pos->board[rook_to_sq] = rook;
+      
+      ue_func = net_castle;
+      
+      ue_arg0 = from_piece;
+      ue_arg1 = from;
+      ue_arg2 = to;
+      ue_arg3 = rook;
+      ue_arg4 = rook_from_sq;
+      ue_arg5 = rook_to_sq;
       
       /*}}}*/
     }
     
+    /*}}}*/
+  }
+  else if (to_piece != EMPTY) {
+    /*{{{  ue capture*/
+    
+    ue_func = net_capture;
+    
+    ue_arg0 = from_piece;
+    ue_arg1 = from;
+    ue_arg2 = to_piece;
+    ue_arg3 = to;
+    
+    /*}}}*/
+  }
+  else {
+    /*{{{  ue move*/
+    
+    ue_func = net_move;
+    
+    ue_arg0 = from_piece;
+    ue_arg1 = from;
+    ue_arg2 = to;
     
     /*}}}*/
   }
@@ -1752,16 +2219,32 @@ static void position(Position *pos, const char *board_fen, const char *stm_str, 
   
   /*}}}*/
 
+  /*{{{  ue*/
+  
+  memcpy(net_h1_a, net_h1_b, sizeof net_h1_a);
+  memcpy(net_h2_a, net_h1_b, sizeof net_h2_a);
+  
+  for (int sq=0; sq < 64; sq++) {
+  
+    const int piece = pos->board[sq];
+  
+    if (piece == EMPTY)
+      continue;
+  
+    for (int h=0; h < NET_H1_SIZE; h++) {
+      const int idx1 = (piece * 64 + sq) * NET_H1_SIZE + h;
+      net_h1_a[h] += net_h1_w[idx1];
+      net_h2_a[h] += net_h2_w[idx1];
+    }
+  
+  }
+  
+  /*}}}*/
+
 }
 
 /*}}}*/
 /*{{{  eval*/
-
-#define DARK_SQ  0x55AA55AA55AA55AAULL
-#define LIGHT_SQ 0xAA55AA55AA55AA55ULL
-
-#define CENTRE4   0x0000001818000000ULL
-#define CENTRE16  0x00003C3C3C3C0000ULL
 
 __attribute__((hot))
 
@@ -1769,53 +2252,16 @@ static int eval(const Position *pos) {
 
   const uint64_t *a = pos->all;
   const int stm = pos->stm;
-  const int stm_multiplier = 1 - (stm << 1);
 
-  int e = 0;
-
-  /*{{{  draw*/
-  
   const int num_pieces = popcount(pos->occupied);
-  
+
   if (num_pieces == 2)
     return 0;
-  
+
   else if (num_pieces == 3 && (a[WKNIGHT] | a[BKNIGHT] | a[WBISHOP] | a[BBISHOP]))
     return 0;
-  
-  /*}}}*/
-  /*{{{  material*/
-  
-  e += 100 * (popcount(a[WPAWN])   - popcount(a[BPAWN]));
-  e += 325 * (popcount(a[WKNIGHT]) - popcount(a[BKNIGHT]));
-  e += 325 * (popcount(a[WBISHOP]) - popcount(a[BBISHOP]));
-  e += 500 * (popcount(a[WROOK])   - popcount(a[BROOK]));
-  e += 975 * (popcount(a[WQUEEN])  - popcount(a[BQUEEN]));
-  
-  /*}}}*/
-  /*{{{  bishop pair*/
-  
-  const int w_bp = !!((a[WBISHOP] & LIGHT_SQ) && (a[WBISHOP] & DARK_SQ));
-  const int b_bp = !!((a[BBISHOP] & LIGHT_SQ) && (a[BBISHOP] & DARK_SQ));
-  
-  e += 50 * (w_bp - b_bp);
-  
-  /*}}}*/
-  /*{{{  centre*/
-  
-  int w_c = popcount(CENTRE4 & pos->colour[WHITE]);
-  int b_c = popcount(CENTRE4 & pos->colour[BLACK]);
-  
-  e += 5 * (w_c - b_c);
-  
-  w_c = popcount(CENTRE16 & pos->colour[WHITE]);
-  b_c = popcount(CENTRE16 & pos->colour[BLACK]);
-  
-  e += 5 * (w_c - b_c);
-  
-  /*}}}*/
 
-  return e * stm_multiplier;
+  return net_eval(stm);
 
 }
 
@@ -1897,13 +2343,16 @@ static int qsearch(int ply, int alpha, int beta) {
 
   init_next_qsearch_move(this_node);
 
-  while ((move = get_next_perft_move(this_node))) {
+  while ((move = get_next_qsearch_move(this_node))) {
 
     *next_pos = *this_pos;
     make_move(next_pos, move);
 
     if (is_attacked(next_pos, bsf(next_pos->all[stm_king]), opp))
       continue;
+
+    ue_func();  // update accumulators
+    // hack copy accumulators
 
     const int score = -qsearch(ply+1, -beta, -alpha);
 
@@ -1964,6 +2413,9 @@ static int search(int ply, int depth, int alpha, int beta) {
 
     if (is_attacked(next_pos, bsf(next_pos->all[stm_king]), opp))
       continue;
+
+    ue_func();  // update accumulators
+    // hack copy accumulators
 
     num_legal_moves++;
 
@@ -2318,7 +2770,7 @@ static int uci_tokens(int num_tokens, char **tokens) {
   else if (!strcmp(cmd, "uci")) {
     /*{{{  uci*/
     
-    printf("id name Naddu %s\n", VER);
+    printf("id name Naddu %s\n", BUILD);
     printf("id author Colin Jenkins\n");
     printf("uciok\n");
     
@@ -2509,15 +2961,18 @@ static void init_once() {
 
   tc.quiet = 0;
 
-  uint64_t start_ms = now_ms();
-
   memset(ss, 0, sizeof(ss));
+
+  uint64_t start_ms = now_ms();
 
   init_pawn_attacks();
   init_knight_attacks();
   init_bishop_attacks();
+
   init_rook_attacks();
   init_king_attacks();
+
+  init_weights();
 
   uint64_t elapsed_ms = now_ms() - start_ms;
 
