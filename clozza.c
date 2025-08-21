@@ -17,7 +17,6 @@
 #include <stdint.h>
 #include <inttypes.h> // PRIu64 PRId64 PRIx64
 #include <ctype.h>
-#include <assert.h>
 #include <time.h>
 #include <sys/time.h>
 
@@ -29,6 +28,8 @@
 
 #define INF  30000
 #define MATE 29000
+
+#define NET_H1_SIZE 256
 
 #define UCI_LINE_LENGTH 8192
 #define UCI_TOKENS      8192
@@ -127,6 +128,9 @@ typedef struct {
   uint8_t in_check;
   uint8_t stage;
 
+  int32_t acc1[NET_H1_SIZE] __attribute__((aligned(64)));  // us acc
+  int32_t acc2[NET_H1_SIZE] __attribute__((aligned(64)));  // them acc
+
 } __attribute__((aligned(64))) Node;
 
 /*}}}*/
@@ -195,8 +199,6 @@ static TimeControl tc;
 /*{{{  utility*/
 
 /*{{{  now_ms*/
-
-// hack not portable
 
 static inline uint64_t now_ms(void) {
 
@@ -281,8 +283,6 @@ __attribute__((always_inline, hot))
 
 static inline int bsf(const uint64_t bb) {
 
-  assert(bb != 0 && "bsf called with zero");
-
   return __builtin_ctzll(bb);
 
 }
@@ -290,15 +290,15 @@ static inline int bsf(const uint64_t bb) {
 /*}}}*/
 /*{{{  xorshift64star*/
 
-static uint64_t rand_seed = 0xDEADBEEFCAFEBABEULL;
+static uint64_t xorshift64star_seed = 0xDEADBEEFCAFEBABEULL;
 
 static uint64_t xorshift64star(void) {
 
-  rand_seed ^= rand_seed >> 12;
-  rand_seed ^= rand_seed << 25;
-  rand_seed ^= rand_seed >> 27;
+  xorshift64star_seed ^= xorshift64star_seed >> 12;
+  xorshift64star_seed ^= xorshift64star_seed << 25;
+  xorshift64star_seed ^= xorshift64star_seed >> 27;
 
-  return rand_seed * 2685821657736338717ULL;
+  return xorshift64star_seed * 2685821657736338717ULL;
 
 }
 
@@ -380,8 +380,6 @@ static void print_bb(const uint64_t bb, const char *tag) {
 /*}}}*/
 /*{{{  format_move*/
 
-// hack pass string * in
-
 static char *format_move(uint32_t move, char *buf) {
 
   static const char files[] = "abcdefgh";
@@ -409,9 +407,11 @@ static char *format_move(uint32_t move, char *buf) {
 /*}}}*/
 /*{{{  print_board*/
 
-static int32_t net_eval (uint8_t stm);
+static int32_t net_eval (Node * __restrict node);
 
-static void print_board(const Position *pos) {
+static void print_board(Node * __restrict node) {
+
+  const Position *pos = &node->pos;
 
   const char piece_chars[12] = {
     'P', 'N', 'B', 'R', 'Q', 'K',
@@ -445,7 +445,7 @@ static void print_board(const Position *pos) {
   printf("stm=%d\n", pos->stm);
   printf("rights=%d\n", pos->rights);
   printf("ep=%d\n", pos->ep);
-  printf("e=%d\n", net_eval(pos->stm));
+  printf("e=%d\n", net_eval(node));
 
 }
 
@@ -469,22 +469,19 @@ static int find_token(char *token, int n, char **tokens) {
 /*{{{  net*/
 
 #define NET_I_SIZE 768
-#define NET_H1_SIZE 256
 #define NET_H1_SHIFT 8
 #define NET_QA 255
 #define NET_QB 64
 #define NET_QAB (NET_QA * NET_QB)
 #define NET_SCALE 400
 
-static int32_t net_h1_a[NET_H1_SIZE]              __attribute__((aligned(64)));  // us acc
-static int32_t net_h2_a[NET_H1_SIZE]              __attribute__((aligned(64)));  // them acc
-static int32_t net_h1_w[NET_I_SIZE * NET_H1_SIZE] __attribute__((aligned(64)));  // us weights
-static int32_t net_h2_w[NET_I_SIZE * NET_H1_SIZE] __attribute__((aligned(64)));  // them weights
+static int32_t net_h1_w[NET_I_SIZE * NET_H1_SIZE] __attribute__((aligned(64)));
+static int32_t net_h2_w[NET_I_SIZE * NET_H1_SIZE] __attribute__((aligned(64)));  // flipped
 static int32_t net_h1_b[NET_H1_SIZE]              __attribute__((aligned(64)));
 static int32_t net_o_w [NET_H1_SIZE * 2]          __attribute__((aligned(64)));
 static int32_t net_o_b;
 
-static void (*ue_func)(void);
+static void (*ue_func)(Node * __restrict node);
 static int ue_arg0;
 static int ue_arg1;
 static int ue_arg2;
@@ -499,7 +496,26 @@ static int ue_arg5;
 __attribute__((always_inline, hot))
 
 static inline int base(int piece, int sq) {
+
+#ifdef DEBUG
+
+  if (piece == EMPTY) {
+    fprintf(stderr, "piece_index error: piece is EMPTY (%d), square=%d\n", piece, sq);
+    abort();
+  }
+  if (piece < 0 || piece > 11) {
+    fprintf(stderr, "piece_index error: piece out of range (%d), square=%d\n", piece, sq);
+    abort();
+  }
+  if (sq < 0 || sq > 63) {
+    fprintf(stderr, "piece_index error: square out of range (%d), piece=%d\n", sq, piece);
+    abort();
+  }
+
+#endif
+
   return (((piece << 6) | sq) << NET_H1_SHIFT);
+
 }
 
 /*}}}*/
@@ -509,6 +525,7 @@ static inline int base(int piece, int sq) {
 //
 // As defined by bullet.
 // https://github.com/jw1912/bullet/blob/main/docs/1-basics.md
+// See also https://github.com/op12no2/clozza/wiki/bullet-notes
 //
 
 static int flip_index(int index) {
@@ -594,13 +611,16 @@ int get_weights(const char* path, int16_t** out, size_t* count_out) {
 
 /*}}}*/
 
-static void init_weights() {
+static int init_weights() {
 
   int16_t* weights = NULL;
   size_t n = 0;
 
-  if (get_weights(NET_FILE, &weights, &n) == 0)
-    assert(0 && "cannot load weights");
+  if (get_weights(NET_FILE, &weights, &n) == 0) {
+    free(weights);
+    fprintf(stderr, "cannot load weights file %s\n", NET_FILE);
+    return 1;
+  }
 
   size_t offset = 0;
 
@@ -624,6 +644,131 @@ static void init_weights() {
 
   free(weights);
 
+  return 0;
+
+}
+
+/*}}}*/
+/*{{{  net_copy*/
+
+static void net_copy(Node * __restrict from_node, Node * __restrict to_node) {
+
+  memcpy(to_node->acc1, from_node->acc1, sizeof from_node->acc1);
+  memcpy(to_node->acc2, from_node->acc2, sizeof from_node->acc2);
+
+}
+
+/*}}}*/
+/*{{{  net_rebuild*/
+
+static void net_rebuild(Node * __restrict node) {
+
+  memcpy(node->acc1, net_h1_b, sizeof net_h1_b);
+  memcpy(node->acc2, net_h1_b, sizeof net_h1_b);
+
+  for (int sq=0; sq < 64; sq++) {
+
+    const int piece = node->pos.board[sq];
+
+    if (piece == EMPTY)
+      continue;
+
+    for (int h=0; h < NET_H1_SIZE; h++) {
+      const int idx1 = (piece * 64 + sq) * NET_H1_SIZE + h;
+      node->acc1[h] += net_h1_w[idx1];
+      node->acc2[h] += net_h2_w[idx1];
+    }
+  }
+
+}
+
+/*}}}*/
+/*{{{  net_check*/
+
+static void net_check(Node * __restrict n1) {
+
+  Node n;
+  Node* n2 = &n;
+
+  Position* pos = &n1->pos;
+
+  /*{{{  check ue*/
+  
+  net_copy(n1, n2);                      // copy the ue accumulators into n2
+  net_rebuild(n1);                       // rebuild the n1 accumulators from scratch
+  
+  for (int i=0; i < NET_H1_SIZE; i++) {  // compare them
+    if (n1->acc1[i] != n2->acc1[i]) {
+      fprintf(stderr, "a1 %d\n", i);
+    }
+    if (n1->acc2[i] != n2->acc2[i]) {
+      fprintf(stderr, "a2 %d\n", i);
+    }
+  }
+  
+  /*}}}*/
+  /*{{{  check bb == board*/
+  
+  uint64_t all[12] = {0};
+  uint64_t colour[2] = {0};
+  uint64_t occupied = 0;
+  
+  for (int sq = 0; sq < 64; sq++) {
+  
+    int piece = pos->board[sq];
+  
+    if (piece == EMPTY) continue;
+  
+    all[piece]                         |= (1ULL << sq);
+    colour[piece >= 6 ? BLACK : WHITE] |= (1ULL << sq);
+    occupied                           |= (1ULL << sq);
+  
+  }
+  
+  for (int p = 0; p < 12; p++) {
+    if (all[p] != pos->all[p]) {
+      fprintf(stderr, "verify_from_board: mismatch in all[%d]\n", p);
+    }
+  }
+  
+  if (colour[WHITE] != pos->colour[WHITE]) {
+    fprintf(stderr, "verify_from_board: mismatch in colour[WHITE]\n");
+  }
+  
+  if (colour[BLACK] != pos->colour[BLACK]) {
+    fprintf(stderr, "verify_from_board: mismatch in colour[BLACK]\n");
+  }
+  
+  if (occupied != pos->occupied) {
+    fprintf(stderr, "verify_from_board: mismatch in occupied\n");
+  }
+  
+  /*}}}*/
+  /*{{{  check board == bb*/
+  
+  uint8_t board[64];
+  
+  for (int sq = 0; sq < 64; sq++)
+    board[sq] = EMPTY;
+  
+  for (int p=0; p < 12; p++) {
+    uint64_t bb = pos->all[p];
+    while (bb) {
+      int sq = __builtin_ctzll(bb);
+      board[sq] = p;
+      bb &= bb - 1;
+    }
+  }
+  
+  for (int sq = 0; sq < 64; sq++) {
+    if (board[sq] != pos->board[sq]) {
+      fprintf(stderr, "verify_from_bitboards: mismatch at square %d (expected %d got %d)\n",
+                      sq, pos->board[sq], board[sq]);
+    }
+  }
+  
+  /*}}}*/
+
 }
 
 /*}}}*/
@@ -638,10 +783,12 @@ static inline int32_t sqrelu(int32_t x) {
 
 __attribute__((hot))
 
-static int32_t net_eval(uint8_t stm) {
+static int32_t net_eval(Node * __restrict node) {
 
-  const int32_t* __restrict a1 = (stm == 0 ? net_h1_a : net_h2_a);
-  const int32_t* __restrict a2 = (stm == 0 ? net_h2_a : net_h1_a);
+  const int stm = node->pos.stm;
+
+  const int32_t* __restrict a1 = (stm == 0 ? node->acc1 : node->acc2);
+  const int32_t* __restrict a2 = (stm == 0 ? node->acc2 : node->acc1);
 
   const int32_t* __restrict w1 = &net_o_w[0];
   const int32_t* __restrict w2 = &net_o_w[NET_H1_SIZE];
@@ -673,16 +820,14 @@ static int32_t net_eval(uint8_t stm) {
 
 __attribute__((hot))
 
-static void net_move() {
+static void net_move(Node * __restrict node) {
 
   const int fr_piece = ue_arg0;
   const int fr       = ue_arg1;
   const int to       = ue_arg2;
 
-  assert(fr != to && "would break aliases");
-
-  int32_t * __restrict a1 = &net_h1_a[0];
-  int32_t * __restrict a2 = &net_h2_a[0];
+  int32_t * __restrict a1 = node->acc1;
+  int32_t * __restrict a2 = node->acc2;
 
   const int b1 = base(fr_piece, fr);
   const int b2 = base(fr_piece, to);
@@ -711,17 +856,15 @@ static void net_move() {
 
 __attribute__((hot))
 
-static void net_capture() {
+static void net_capture(Node * __restrict node) {
 
   const int fr_piece = ue_arg0;
   const int fr       = ue_arg1;
   const int to_piece = ue_arg2;
   const int to       = ue_arg3;
 
-  assert(fr != to && "would break aliases");
-
-  int32_t * __restrict a1 = &net_h1_a[0];
-  int32_t * __restrict a2 = &net_h2_a[0];
+  int32_t * __restrict a1 = node->acc1;
+  int32_t * __restrict a2 = node->acc2;
 
   const int b1 = base(fr_piece, fr);
   const int b2 = base(to_piece, to);
@@ -753,7 +896,7 @@ static void net_capture() {
 
 __attribute__((hot))
 
-static void net_promote () {
+static void net_promote (Node * __restrict node) {
 
   const int pawn_piece    = ue_arg0;
   const int pawn_fr       = ue_arg1;
@@ -761,24 +904,24 @@ static void net_promote () {
   const int capture_piece = ue_arg3;
   const int promote_piece = ue_arg4;
 
-  assert(pawn_fr != pawn_to && "would break aliases");
-
-  int32_t * __restrict a1 = &net_h1_a[0];
-  int32_t * __restrict a2 = &net_h2_a[0];
+  int32_t * __restrict a1 = node->acc1;
+  int32_t * __restrict a2 = node->acc2;
 
   const int b1 = base(pawn_piece, pawn_fr);
   const int b2 = base(promote_piece, pawn_to);
-  const int b3 = base(capture_piece, pawn_to);
 
   const int32_t * __restrict w1_b1 = &net_h1_w[b1];
   const int32_t * __restrict w1_b2 = &net_h1_w[b2];
-  const int32_t * __restrict w1_b3 = &net_h1_w[b3];
 
   const int32_t * __restrict w2_b1 = &net_h2_w[b1];
   const int32_t * __restrict w2_b2 = &net_h2_w[b2];
-  const int32_t * __restrict w2_b3 = &net_h2_w[b3];
 
-  if (capture_piece != 0) {
+  if (capture_piece != EMPTY) {
+
+    const int b3 = base(capture_piece, pawn_to);
+    const int32_t * __restrict w1_b3 = &net_h1_w[b3];
+    const int32_t * __restrict w2_b3 = &net_h2_w[b3];
+
     #if defined(__clang__)
     #pragma clang loop vectorize(enable) interleave(enable) unroll_count(8)
     #elif defined(__GNUC__)
@@ -789,8 +932,11 @@ static void net_promote () {
       a1[i] += w1_b2[i] - w1_b1[i] - w1_b3[i];
       a2[i] += w2_b2[i] - w2_b1[i] - w2_b3[i];
     }
+
   }
+
   else {
+
     #if defined(__clang__)
     #pragma clang loop vectorize(enable) interleave(enable) unroll_count(8)
     #elif defined(__GNUC__)
@@ -801,8 +947,8 @@ static void net_promote () {
       a1[i] += w1_b2[i] - w1_b1[i];
       a2[i] += w2_b2[i] - w2_b1[i];
     }
-  }
 
+  }
 }
 
 /*}}}*/
@@ -810,20 +956,20 @@ static void net_promote () {
 
 __attribute__((hot))
 
-static void net_ep_capture () {
+static void net_ep_capture (Node * __restrict node) {
 
   const int pawn_piece         = ue_arg0;
   const int pawn_fr            = ue_arg1;
   const int pawn_to            = ue_arg2;
-  const int pawn_capture_piece = ue_arg3;
-  const int ep                 = ue_arg4;
+  const int opp_pawn_piece     = ue_arg3;
+  const int opp_pawn_sq        = ue_arg4;
 
-  int32_t * __restrict a1 = &net_h1_a[0];
-  int32_t * __restrict a2 = &net_h2_a[0];
+  int32_t * __restrict a1 = node->acc1;
+  int32_t * __restrict a2 = node->acc2;
 
-  const int b1 = base(pawn_piece,         pawn_fr);
-  const int b2 = base(pawn_piece,         pawn_to);
-  const int b3 = base(pawn_capture_piece, ep);
+  const int b1 = base(pawn_piece,     pawn_fr);
+  const int b2 = base(pawn_piece,     pawn_to);
+  const int b3 = base(opp_pawn_piece, opp_pawn_sq);
 
   const int32_t * __restrict w1_b1 = &net_h1_w[b1];
   const int32_t * __restrict w1_b2 = &net_h1_w[b2];
@@ -850,7 +996,7 @@ static void net_ep_capture () {
 /*}}}*/
 /*{{{  net_castle*/
 
-static void net_castle () {
+static void net_castle (Node * __restrict node) {
 
   const int king_piece = ue_arg0;
   const int king_fr    = ue_arg1;
@@ -859,8 +1005,8 @@ static void net_castle () {
   const int rook_fr    = ue_arg4;
   const int rook_to    = ue_arg5;
 
-  int32_t * __restrict a1 = &net_h1_a[0];
-  int32_t * __restrict a2 = &net_h2_a[0];
+  int32_t * __restrict a1 = node->acc1;
+  int32_t * __restrict a2 = node->acc2;
 
   const int b1 = base(king_piece, king_fr);
   const int b2 = base(king_piece, king_to);
@@ -921,8 +1067,6 @@ static inline void get_blockers(Attack *a, uint64_t *blockers) {
     }
   }
 
-  assert(a->bits == num_bits && "wrong bits");
-
   for (int i = 0; i < a->count; i++) {
 
     uint64_t blocker = 0;
@@ -963,7 +1107,11 @@ static void find_magics(Attack attacks[64], const char* label, int verbose) {
       cap = a->count;
       tbl  = (uint64_t*)malloc((size_t)cap * sizeof(uint64_t));
       used = (unsigned*)malloc((size_t)cap * sizeof(unsigned));
-      assert(tbl && used);
+      if (!tbl || !used) {
+        fprintf(stderr, "cannot malloc tbp or used\n");
+        cleanup();
+        abort();
+      }
       memset(used, 0, (size_t)cap * sizeof(unsigned));
     }
 
@@ -980,7 +1128,7 @@ static void find_magics(Attack attacks[64], const char* label, int verbose) {
 
       uint64_t magic = xorshift64star() & xorshift64star() & xorshift64star();
 
-      if (popcount((a->mask * magic) >> (64 - a->bits)) < a->bits - 2)
+      if (popcount((a->mask * magic) >> (64 - a->bits)) < a->bits - 3) // 3 found by trial and error
         continue;
 
       int fail = 0;
@@ -1007,7 +1155,6 @@ static void find_magics(Attack attacks[64], const char* label, int verbose) {
 
         free(a->attacks);
         a->attacks = (uint64_t*)malloc((size_t)a->count * sizeof(uint64_t));
-        assert(a->attacks);
 
         for (int i = 0; i < a->count; i++) {
           a->attacks[i] = (used[i] == stamp) ? tbl[i] : 0ULL;
@@ -1736,6 +1883,7 @@ static void init_next_perft_move(Node * __restrict node, const uint8_t in_check)
 
   gen_pawns_noisy(node);
   gen_pawns_quiet(node);
+
   gen_jumpers(node, knight_attacks, KNIGHT, ~occ | enemies);
   gen_sliders(node, bishop_attacks, BISHOP, ~occ | enemies);
   gen_sliders(node, rook_attacks,   ROOK,   ~occ | enemies);
@@ -1781,6 +1929,7 @@ static void init_next_qsearch_move(Node * __restrict node) {
   const uint64_t enemies = pos->colour[opp] & ~opp_king;
 
   gen_pawns_noisy(node);
+
   gen_jumpers(node, knight_attacks, KNIGHT, enemies);
   gen_sliders(node, bishop_attacks, BISHOP, enemies);
   gen_sliders(node, rook_attacks,   ROOK,   enemies);
@@ -1820,13 +1969,12 @@ static void init_next_search_move(Node * __restrict node, const uint8_t in_check
   const Position *pos = &node->pos;
   const int stm = pos->stm;
   const int opp = stm ^ 1;
-  //const uint64_t occ = pos->occupied;
-  //const uint64_t friends = pos->colour[stm];
   const uint64_t opp_king = pos->all[piece_index(KING, opp)];
   const uint64_t opp_king_near = king_attacks[bsf(opp_king)];
   const uint64_t enemies = pos->colour[opp] & ~opp_king;
 
   gen_pawns_noisy(node);
+
   gen_jumpers(node, knight_attacks, KNIGHT, enemies);
   gen_sliders(node, bishop_attacks, BISHOP, enemies);
   gen_sliders(node, rook_attacks,   ROOK,   enemies);
@@ -1859,18 +2007,18 @@ static uint32_t get_next_search_move(Node * __restrict node) {
       const int stm = pos->stm;
       const int opp = stm ^ 1;
       const uint64_t occ = pos->occupied;
-      //const uint64_t friends = pos->colour[stm];
       const uint64_t opp_king = pos->all[piece_index(KING, opp)];
       const uint64_t opp_king_near = king_attacks[bsf(opp_king)];
-      //const uint64_t enemies = pos->colour[opp] & ~opp_king;
       
       gen_pawns_quiet(node);
+      
       gen_jumpers(node, knight_attacks, KNIGHT, ~occ);
       gen_sliders(node, bishop_attacks, BISHOP, ~occ);
       gen_sliders(node, rook_attacks,   ROOK,   ~occ);
       gen_sliders(node, bishop_attacks, QUEEN,  ~occ);
       gen_sliders(node, rook_attacks,   QUEEN,  ~occ);
       gen_jumpers(node, king_attacks,   KING,   ~occ & ~opp_king_near);
+      
       if (node->pos.rights && !node->in_check)
         gen_castling(node);
       
@@ -1889,7 +2037,7 @@ static uint32_t get_next_search_move(Node * __restrict node) {
     }
 
     default:
-      assert(0 && "oops");
+      fprintf(stderr, "oops\n");
       return 0;
   }
 }
@@ -1986,8 +2134,6 @@ static inline void make_move(Position * __restrict pos, const uint32_t move) {
   if (move & MASK_SPECIAL) {
     /*{{{  specials*/
     
-    // hack - use an indirect func call? measure it - maybe different make_move versions
-    
     if (move & FLAG_PROMO) {
       /*{{{  promo*/
       
@@ -2002,8 +2148,9 @@ static inline void make_move(Position * __restrict pos, const uint32_t move) {
       
       ue_arg0 = from_piece;
       ue_arg1 = from;
-      ue_arg2 = to_piece;
-      ue_arg3 = pro;
+      ue_arg2 = to;
+      ue_arg3 = to_piece;
+      ue_arg4 = pro;
       
       /*}}}*/
     }
@@ -2025,7 +2172,7 @@ static inline void make_move(Position * __restrict pos, const uint32_t move) {
       ue_arg1 = from;
       ue_arg2 = to;
       ue_arg3 = opp_pawn;
-      ue_arg4 = pos->ep;
+      ue_arg4 = pawn_sq;
       
       /*}}}*/
     }
@@ -2113,7 +2260,7 @@ static void play_move(Node *node, char *uci_move) {
 
   char buf[6];
 
-  Position *pos = &node->pos; //hack needs to be const but need to tweak make_move and other callers
+  Position *pos = &node->pos;
   const int stm = pos->stm;
   const int opp = stm ^ 1;
   const int stm_king = piece_index(KING, stm);
@@ -2131,14 +2278,16 @@ static void play_move(Node *node, char *uci_move) {
     }
   }
 
-  assert(0 && "cannot find uci move");
+  fprintf(stderr, "cannot find uci move %s\n", uci_move);
 
 }
 
 /*}}}*/
 /*{{{  position*/
 
-static void position(Position *pos, const char *board_fen, const char *stm_str, const char *rights_str, const char *ep_str) {
+static void position(Node * __restrict node, const char *board_fen, const char *stm_str, const char *rights_str, const char *ep_str) {
+
+  Position* pos = &node->pos;
 
   const int char_to_piece[128] = {
     ['p'] = 0, ['n'] = 1, ['b'] = 2, ['r'] = 3, ['q'] = 4, ['k'] = 5,
@@ -2219,27 +2368,9 @@ static void position(Position *pos, const char *board_fen, const char *stm_str, 
   
   /*}}}*/
 
-  /*{{{  ue*/
-  
-  memcpy(net_h1_a, net_h1_b, sizeof net_h1_a);
-  memcpy(net_h2_a, net_h1_b, sizeof net_h2_a);
-  
-  for (int sq=0; sq < 64; sq++) {
-  
-    const int piece = pos->board[sq];
-  
-    if (piece == EMPTY)
-      continue;
-  
-    for (int h=0; h < NET_H1_SIZE; h++) {
-      const int idx1 = (piece * 64 + sq) * NET_H1_SIZE + h;
-      net_h1_a[h] += net_h1_w[idx1];
-      net_h2_a[h] += net_h2_w[idx1];
-    }
-  
-  }
-  
-  /*}}}*/
+
+  net_rebuild(node);
+
 
 }
 
@@ -2248,11 +2379,10 @@ static void position(Position *pos, const char *board_fen, const char *stm_str, 
 
 __attribute__((hot))
 
-static int eval(const Position *pos) {
+static int eval(Node * __restrict node) {
 
+  const Position* pos = &node->pos;
   const uint64_t *a = pos->all;
-  const int stm = pos->stm;
-
   const int num_pieces = popcount(pos->occupied);
 
   if (num_pieces == 2)
@@ -2261,7 +2391,7 @@ static int eval(const Position *pos) {
   else if (num_pieces == 3 && (a[WKNIGHT] | a[BKNIGHT] | a[WBISHOP] | a[BBISHOP]))
     return 0;
 
-  return net_eval(stm);
+  return net_eval(node);
 
 }
 
@@ -2326,7 +2456,7 @@ static int qsearch(int ply, int alpha, int beta) {
   Node *this_node = &ss[ply];
   Position *this_pos = &this_node->pos;
 
-  const int stand_pat = eval(this_pos);
+  const int stand_pat = eval(this_node);
   if (stand_pat >= beta)
     return beta;
   if (stand_pat > alpha)
@@ -2345,14 +2475,18 @@ static int qsearch(int ply, int alpha, int beta) {
 
   while ((move = get_next_qsearch_move(this_node))) {
 
-    *next_pos = *this_pos;
-    make_move(next_pos, move);
+    *next_pos = *this_pos;      // copy
+    make_move(next_pos, move);  // make
 
     if (is_attacked(next_pos, bsf(next_pos->all[stm_king]), opp))
       continue;
 
-    ue_func();  // update accumulators
-    // hack copy accumulators
+    net_copy(this_node, next_node);   // rest of copy
+    ue_func(next_node);               // rest of make
+
+#ifdef DEBUG
+    net_check(next_node);
+#endif
 
     const int score = -qsearch(ply+1, -beta, -alpha);
 
@@ -2414,8 +2548,12 @@ static int search(int ply, int depth, int alpha, int beta) {
     if (is_attacked(next_pos, bsf(next_pos->all[stm_king]), opp))
       continue;
 
-    ue_func();  // update accumulators
-    // hack copy accumulators
+    net_copy(this_node, next_node);   // rest of copy
+    ue_func(next_node);               // rest of make
+
+#ifdef DEBUG
+    net_check(next_node);
+#endif
 
     num_legal_moves++;
 
@@ -2430,7 +2568,6 @@ static int search(int ply, int depth, int alpha, int beta) {
     if (score > alpha) {
       alpha = score;
       if (ply == 0) {
-        assert(move != 0 && "setting null bm in search");
         tc.bm = move;
         tc.bs = score;
       }
@@ -2484,8 +2621,6 @@ static void go(int max_ply) {
       break;
 
   }
-
-  assert(tc.bm != 0 && "null bm");
 
   format_move(tc.bm, bm_str);
   if (!tc.quiet)
@@ -2656,10 +2791,10 @@ static int uci_tokens(int num_tokens, char **tokens) {
     /*{{{  position*/
     
     if (!strcmp(sub, "startpos") || !strcmp(sub, "s"))
-      position(&ss[0].pos, "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR", "w", "KQkq", "-");
+      position(&ss[0], "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR", "w", "KQkq", "-");
     
     else if (!strcmp(sub, "fen") || !strcmp(sub, "f") )
-      position(&ss[0].pos, tokens[2], tokens[3], tokens[4], tokens[5]);
+      position(&ss[0], tokens[2], tokens[3], tokens[4], tokens[5]);
     
     int n = find_token("moves", num_tokens, tokens);
     if (n > 0) {
@@ -2779,14 +2914,14 @@ static int uci_tokens(int num_tokens, char **tokens) {
   else if (!strcmp(cmd, "b")) {
     /*{{{  board*/
     
-    print_board(&ss[0].pos);
+    print_board(&ss[0]);
     
     /*}}}*/
   }
   else if (!strcmp(cmd, "e")) {
     /*{{{  eval*/
     
-    const int e = eval(&ss[0].pos);
+    const int e = eval(&ss[0]);
     
     printf("%d\n", e);
     
@@ -2817,7 +2952,7 @@ static int uci_tokens(int num_tokens, char **tokens) {
     uint64_t start_ms = now_ms();
     uint64_t total_nodes = 0;
     
-    tc.quiet = 1;
+    //hacktc.quiet = 1;
     
     for (int i=0; i < num_fens; i++) {
     
@@ -2829,7 +2964,12 @@ static int uci_tokens(int num_tokens, char **tokens) {
       line[sizeof(line) - 1] = '\0';
       uci_exec(line);
     
-      strncpy(line, "go depth 5", sizeof(line) - 1);
+    #ifdef DEBUG
+      strncpy(line, "go depth 3", sizeof(line) - 1);
+    #else
+      strncpy(line, "go depth 6", sizeof(line) - 1);
+    #endif
+    
       line[sizeof(line) - 1] = '\0';
       uci_exec(line);
     
@@ -2957,7 +3097,7 @@ static void uci_loop(int argc, char **argv) {
 
 __attribute__((cold))
 
-static void init_once() {
+static int init_once() {
 
   tc.quiet = 0;
 
@@ -2972,12 +3112,14 @@ static void init_once() {
   init_rook_attacks();
   init_king_attacks();
 
-  init_weights();
+  if (init_weights())
+    return 1;
 
   uint64_t elapsed_ms = now_ms() - start_ms;
 
   printf("info init_once %" PRIu64 "ms\n", elapsed_ms);
 
+  return 0;
 }
 
 /*}}}*/
@@ -2986,7 +3128,11 @@ static void init_once() {
 
 int main(int argc, char **argv) {
 
-  init_once();
+  if (init_once()) {
+    cleanup();
+    return 1;
+  }
+
   uci_loop(argc, argv);
   cleanup();
 
