@@ -20,6 +20,31 @@
 #include <time.h>
 #include <sys/time.h>
 
+#if defined(__GNUC__) || defined(__clang__)
+#define INLINE_HOT static inline __attribute__((always_inline, hot))
+#define HOT static __attribute__((hot))
+#define COLD static __attribute__((cold))
+#else
+#define INLINE_HOT static inline
+#define HOT static
+#define COLD static
+#endif
+
+#define STRINGIFY_HELPER(x) #x
+#define STRINGIFY(x) STRINGIFY_HELPER(x)
+
+#if defined(__clang__)
+  #define VEC_HINT(n) \
+    _Pragma("clang loop vectorize(enable) interleave(enable)") \
+    _Pragma(STRINGIFY(clang loop unroll_count(n)))
+#elif defined(__GNUC__)
+  #define VEC_HINT(n) \
+    _Pragma("GCC ivdep") \
+    _Pragma(STRINGIFY(GCC unroll n))
+#else
+  #define VEC_HINT(n)
+#endif
+
 /*}}}*/
 /*{{{  constants*/
 
@@ -200,7 +225,7 @@ static TimeControl tc;
 
 /*{{{  now_ms*/
 
-static inline uint64_t now_ms(void) {
+INLINE_HOT uint64_t now_ms(void) {
 
   struct timespec ts;
 
@@ -212,9 +237,7 @@ static inline uint64_t now_ms(void) {
 /*}}}*/
 /*{{{  check_tc*/
 
-__attribute__((always_inline, hot))
-
-static inline int check_tc() {
+INLINE_HOT int check_tc() {
 
   if (tc.measure == 0)
     return tc.finished;
@@ -243,9 +266,7 @@ static inline int check_tc() {
 
 #define MEASURE_MASK ((1 << 10) - 1)
 
-__attribute__((always_inline, hot))
-
-static inline void bump_nodes() {
+INLINE_HOT void bump_nodes() {
 
   tc.nodes++;
 
@@ -257,9 +278,7 @@ static inline void bump_nodes() {
 /*}}}*/
 /*{{{  popcount*/
 
-__attribute__((always_inline, hot))
-
-static inline int popcount(const uint64_t bb) {
+INLINE_HOT int popcount(const uint64_t bb) {
 
   return __builtin_popcountll(bb);
 
@@ -268,9 +287,7 @@ static inline int popcount(const uint64_t bb) {
 /*}}}*/
 /*{{{  encode_move*/
 
-__attribute__((always_inline, hot))
-
-static inline uint32_t encode_move(const int from, const int to, const uint32_t flags) {
+INLINE_HOT uint32_t encode_move(const int from, const int to, const uint32_t flags) {
 
   return (from << 6) | to | flags;
 
@@ -279,9 +296,7 @@ static inline uint32_t encode_move(const int from, const int to, const uint32_t 
 /*}}}*/
 /*{{{  bsf*/
 
-__attribute__((always_inline, hot))
-
-static inline int bsf(const uint64_t bb) {
+INLINE_HOT int bsf(const uint64_t bb) {
 
   return __builtin_ctzll(bb);
 
@@ -305,9 +320,7 @@ static uint64_t xorshift64star(void) {
 /*}}}*/
 /*{{{  cleanup*/
 
-__attribute__((cold))
-
-static void cleanup() {
+COLD void cleanup() {
 
   for (int sq = 0; sq < 64; sq++) {
 
@@ -321,9 +334,7 @@ static void cleanup() {
 /*}}}*/
 /*{{{  piece_index*/
 
-__attribute__((always_inline, hot))
-
-static inline int piece_index(const int piece, const int colour) {
+INLINE_HOT int piece_index(const int piece, const int colour) {
 
   return piece + colour * 6;
 
@@ -332,9 +343,7 @@ static inline int piece_index(const int piece, const int colour) {
 /*}}}*/
 /*{{{  colour_index*/
 
-__attribute__((always_inline, hot))
-
-static inline int colour_index(const int colour) {
+INLINE_HOT int colour_index(const int colour) {
 
   return colour * 6;
 
@@ -343,9 +352,7 @@ static inline int colour_index(const int colour) {
 /*}}}*/
 /*{{{  toggle*/
 
-__attribute__((always_inline, hot))
-
-static inline int toggle(const int stm) {
+INLINE_HOT int toggle(const int stm) {
 
   return stm ^ 1;
 
@@ -354,7 +361,7 @@ static inline int toggle(const int stm) {
 /*}}}*/
 /*{{{  print_bb*/
 
-static void print_bb(const uint64_t bb, const char *tag) {
+COLD void print_bb(const uint64_t bb, const char *tag) {
 
   printf("%s\n", tag);
 
@@ -407,9 +414,9 @@ static char *format_move(uint32_t move, char *buf) {
 /*}}}*/
 /*{{{  print_board*/
 
-static int32_t net_eval (Node * __restrict node);
+HOT int32_t net_eval (Node * __restrict node);
 
-static void print_board(Node * __restrict node) {
+COLD void print_board(Node * __restrict node) {
 
   const Position *pos = &node->pos;
 
@@ -468,6 +475,7 @@ static int find_token(char *token, int n, char **tokens) {
 /*}}}*/
 /*{{{  net*/
 
+#define NET_FILE "../lozza/nets/farm1/lozza-500/quantised.bin"
 #define NET_I_SIZE 768
 #define NET_H1_SHIFT 8
 #define NET_QA 255
@@ -489,13 +497,9 @@ static int ue_arg3;
 static int ue_arg4;
 static int ue_arg5;
 
-#define NET_FILE "../lozza/nets/farm1/lozza-500/quantised.bin"
-
 /*{{{  base*/
 
-__attribute__((always_inline, hot))
-
-static inline int base(int piece, int sq) {
+INLINE_HOT int base(int piece, int sq) {
 
 #ifdef DEBUG
 
@@ -528,7 +532,7 @@ static inline int base(int piece, int sq) {
 // See also https://github.com/op12no2/clozza/wiki/bullet-notes
 //
 
-static int flip_index(int index) {
+COLD int flip_index(int index) {
 
   int piece  = index / (64 * NET_H1_SIZE);
   int square = (index / NET_H1_SIZE) % 64;
@@ -544,7 +548,7 @@ static int flip_index(int index) {
 /*}}}*/
 /*{{{  read_file*/
 
-static uint8_t* read_file(const char* path, size_t* size_out) {
+COLD uint8_t* read_file(const char* path, size_t* size_out) {
 
     *size_out = 0;
     FILE* f = fopen(path, "rb");
@@ -586,7 +590,7 @@ static uint8_t* read_file(const char* path, size_t* size_out) {
 /*}}}*/
 /*{{{  get_weights*/
 
-int get_weights(const char* path, int16_t** out, size_t* count_out) {
+COLD int get_weights(const char* path, int16_t** out, size_t* count_out) {
 
   size_t bytes = 0;
 
@@ -611,7 +615,7 @@ int get_weights(const char* path, int16_t** out, size_t* count_out) {
 
 /*}}}*/
 
-static int init_weights() {
+COLD int init_weights() {
 
   int16_t* weights = NULL;
   size_t n = 0;
@@ -651,7 +655,7 @@ static int init_weights() {
 /*}}}*/
 /*{{{  net_copy*/
 
-static void net_copy(Node * __restrict from_node, Node * __restrict to_node) {
+INLINE_HOT void net_copy(Node * __restrict from_node, Node * __restrict to_node) {
 
   memcpy(to_node->acc1, from_node->acc1, sizeof from_node->acc1);
   memcpy(to_node->acc2, from_node->acc2, sizeof from_node->acc2);
@@ -661,7 +665,7 @@ static void net_copy(Node * __restrict from_node, Node * __restrict to_node) {
 /*}}}*/
 /*{{{  net_rebuild*/
 
-static void net_rebuild(Node * __restrict node) {
+void net_rebuild(Node * __restrict node) {
 
   memcpy(node->acc1, net_h1_b, sizeof net_h1_b);
   memcpy(node->acc2, net_h1_b, sizeof net_h1_b);
@@ -685,7 +689,7 @@ static void net_rebuild(Node * __restrict node) {
 /*}}}*/
 /*{{{  net_check*/
 
-static void net_check(Node * __restrict n1) {
+COLD void net_check(Node * __restrict n1) {
 
   Node n;
   Node* n2 = &n;
@@ -774,16 +778,12 @@ static void net_check(Node * __restrict n1) {
 /*}}}*/
 /*{{{  net_eval*/
 
-__attribute__((always_inline, hot))
-
-static inline int32_t sqrelu(int32_t x) {
+INLINE_HOT int32_t sqrelu(int32_t x) {
   int32_t y = x & ~(x >> 31);
   return y * y;
 }
 
-__attribute__((hot))
-
-static int32_t net_eval(Node * __restrict node) {
+HOT int32_t net_eval(Node * __restrict node) {
 
   const int stm = node->pos.stm;
 
@@ -793,17 +793,11 @@ static int32_t net_eval(Node * __restrict node) {
   const int32_t* __restrict w1 = &net_o_w[0];
   const int32_t* __restrict w2 = &net_o_w[NET_H1_SIZE];
 
-  int64_t acc = 0;
+  int32_t acc = 0;
 
-  #if defined(__clang__)
-  #pragma clang loop vectorize(enable) interleave(enable) unroll_count(8)
-  #elif defined(__GNUC__)
-  #pragma GCC ivdep
-  #pragma GCC unroll 8
-  #endif
-  for (int i=0; i < NET_H1_SIZE; i++) {
-    acc += (int64_t)w1[i] * sqrelu(a1[i])
-         + (int64_t)w2[i] * sqrelu(a2[i]);
+  VEC_HINT(4)
+  for (int i=0; i < NET_H1_SIZE; i++) {  // vec eval
+    acc += w1[i] * sqrelu(a1[i])  + w2[i] * sqrelu(a2[i]);
   }
 
   acc /= NET_QA;
@@ -811,16 +805,14 @@ static int32_t net_eval(Node * __restrict node) {
   acc *= NET_SCALE;
   acc /= NET_QAB;
 
-  return (int32_t)acc;
+  return acc;
 
 }
 
 /*}}}*/
 /*{{{  net_move*/
 
-__attribute__((hot))
-
-static void net_move(Node * __restrict node) {
+HOT void net_move(Node * __restrict node) {
 
   const int fr_piece = ue_arg0;
   const int fr       = ue_arg1;
@@ -838,13 +830,8 @@ static void net_move(Node * __restrict node) {
   const int32_t * __restrict w2_b1 = &net_h2_w[b1];
   const int32_t * __restrict w2_b2 = &net_h2_w[b2];
 
-  #if defined(__clang__)
-  #pragma clang loop vectorize(enable) interleave(enable) unroll_count(8)
-  #elif defined(__GNUC__)
-  #pragma GCC ivdep
-  #pragma GCC unroll 8
-  #endif
-  for (int i=0; i < NET_H1_SIZE; i++) {
+  VEC_HINT(4)
+  for (int i=0; i < NET_H1_SIZE; i++) {  // vec move
     a1[i] += w1_b2[i] - w1_b1[i];
     a2[i] += w2_b2[i] - w2_b1[i];
   }
@@ -854,9 +841,7 @@ static void net_move(Node * __restrict node) {
 /*}}}*/
 /*{{{  net_capture*/
 
-__attribute__((hot))
-
-static void net_capture(Node * __restrict node) {
+HOT void net_capture(Node * __restrict node) {
 
   const int fr_piece = ue_arg0;
   const int fr       = ue_arg1;
@@ -878,13 +863,8 @@ static void net_capture(Node * __restrict node) {
   const int32_t * __restrict w2_b2 = &net_h2_w[b2];
   const int32_t * __restrict w2_b3 = &net_h2_w[b3];
 
-  #if defined(__clang__)
-  #pragma clang loop vectorize(enable) interleave(enable) unroll_count(8)
-  #elif defined(__GNUC__)
-  #pragma GCC ivdep
-  #pragma GCC unroll 8
-  #endif
-  for (int i=0; i < NET_H1_SIZE; i++) {
+  VEC_HINT(4)
+  for (int i=0; i < NET_H1_SIZE; i++) {  // vec cap
     a1[i] += w1_b3[i] - w1_b2[i] - w1_b1[i];
     a2[i] += w2_b3[i] - w2_b2[i] - w2_b1[i];
   }
@@ -894,9 +874,7 @@ static void net_capture(Node * __restrict node) {
 /*}}}*/
 /*{{{  net_promote*/
 
-__attribute__((hot))
-
-static void net_promote (Node * __restrict node) {
+HOT void net_promote (Node * __restrict node) {
 
   const int pawn_piece    = ue_arg0;
   const int pawn_fr       = ue_arg1;
@@ -922,13 +900,8 @@ static void net_promote (Node * __restrict node) {
     const int32_t * __restrict w1_b3 = &net_h1_w[b3];
     const int32_t * __restrict w2_b3 = &net_h2_w[b3];
 
-    #if defined(__clang__)
-    #pragma clang loop vectorize(enable) interleave(enable) unroll_count(8)
-    #elif defined(__GNUC__)
-    #pragma GCC ivdep
-    #pragma GCC unroll 8
-    #endif
-    for (int i=0; i < NET_H1_SIZE; i++) {
+    VEC_HINT(4)
+    for (int i=0; i < NET_H1_SIZE; i++) {  // vec prom cap
       a1[i] += w1_b2[i] - w1_b1[i] - w1_b3[i];
       a2[i] += w2_b2[i] - w2_b1[i] - w2_b3[i];
     }
@@ -937,13 +910,8 @@ static void net_promote (Node * __restrict node) {
 
   else {
 
-    #if defined(__clang__)
-    #pragma clang loop vectorize(enable) interleave(enable) unroll_count(8)
-    #elif defined(__GNUC__)
-    #pragma GCC ivdep
-    #pragma GCC unroll 8
-    #endif
-    for (int i=0; i < NET_H1_SIZE; i++) {
+    VEC_HINT(4)
+    for (int i=0; i < NET_H1_SIZE; i++) {  // vec prom push
       a1[i] += w1_b2[i] - w1_b1[i];
       a2[i] += w2_b2[i] - w2_b1[i];
     }
@@ -954,9 +922,7 @@ static void net_promote (Node * __restrict node) {
 /*}}}*/
 /*{{{  net_ep_capture*/
 
-__attribute__((hot))
-
-static void net_ep_capture (Node * __restrict node) {
+HOT void net_ep_capture (Node * __restrict node) {
 
   const int pawn_piece         = ue_arg0;
   const int pawn_fr            = ue_arg1;
@@ -979,13 +945,8 @@ static void net_ep_capture (Node * __restrict node) {
   const int32_t * __restrict w2_b2 = &net_h2_w[b2];
   const int32_t * __restrict w2_b3 = &net_h2_w[b3];
 
-  #if defined(__clang__)
-  #pragma clang loop vectorize(enable) interleave(enable) unroll_count(8)
-  #elif defined(__GNUC__)
-  #pragma GCC ivdep
-  #pragma GCC unroll 8
-  #endif
-  for (int i=0; i < NET_H1_SIZE; i++) {
+  VEC_HINT(4)
+  for (int i=0; i < NET_H1_SIZE; i++) {  // vec ep
     a1[i] += w1_b2[i] - w1_b1[i] - w1_b3[i];
     a2[i] += w2_b2[i] - w2_b1[i] - w2_b3[i];
   }
@@ -996,7 +957,7 @@ static void net_ep_capture (Node * __restrict node) {
 /*}}}*/
 /*{{{  net_castle*/
 
-static void net_castle (Node * __restrict node) {
+HOT void net_castle (Node * __restrict node) {
 
   const int king_piece = ue_arg0;
   const int king_fr    = ue_arg1;
@@ -1023,13 +984,8 @@ static void net_castle (Node * __restrict node) {
   const int32_t * __restrict w2_b3 = &net_h2_w[b3];
   const int32_t * __restrict w2_b4 = &net_h2_w[b4];
 
-  #if defined(__clang__)
-  #pragma clang loop vectorize(enable) interleave(enable) unroll_count(8)
-  #elif defined(__GNUC__)
-  #pragma GCC ivdep
-  #pragma GCC unroll 8
-  #endif
-  for (int i=0; i < NET_H1_SIZE; i++) {
+  VEC_HINT(4)
+  for (int i=0; i < NET_H1_SIZE; i++) {  // vec_castle
     a1[i] += w1_b2[i] - w1_b1[i] + w1_b4[i] - w1_b3[i];
     a2[i] += w2_b2[i] - w2_b1[i] + w2_b4[i] - w2_b3[i];
   }
@@ -1043,9 +999,7 @@ static void net_castle (Node * __restrict node) {
 
 /*{{{  magic_index*/
 
-__attribute__((always_inline, hot))
-
-static inline int magic_index(const uint64_t blockers, const uint64_t magic, const int shift) {
+INLINE_HOT int magic_index(const uint64_t blockers, const uint64_t magic, const int shift) {
 
   return (int)((blockers * magic) >> shift);
 
@@ -1054,9 +1008,7 @@ static inline int magic_index(const uint64_t blockers, const uint64_t magic, con
 /*}}}*/
 /*{{{  get_blockers*/
 
-__attribute__((always_inline, hot))
-
-static inline void get_blockers(Attack *a, uint64_t *blockers) {
+COLD void get_blockers(Attack *a, uint64_t *blockers) {
 
   int bits[64];
   int num_bits = 0;
@@ -1085,7 +1037,7 @@ static inline void get_blockers(Attack *a, uint64_t *blockers) {
 /*}}}*/
 /*{{{  find_magics*/
 
-static void find_magics(Attack attacks[64], const char* label, int verbose) {
+COLD void find_magics(Attack attacks[64], const char* label, int verbose) {
 
   int total_tries = 0;
 
@@ -1189,9 +1141,7 @@ static void find_magics(Attack attacks[64], const char* label, int verbose) {
 
 // these are attacks *to* the sq and used in pawn_gen (ep) and is_attacked
 
-__attribute__((cold))
-
-static void init_pawn_attacks(void) {
+COLD void init_pawn_attacks(void) {
 
   for (int sq = 0; sq < 64; sq++) {
 
@@ -1209,9 +1159,7 @@ static void init_pawn_attacks(void) {
 /*}}}*/
 /*{{{  init_knight_attacks*/
 
-__attribute__((cold))
-
-static void init_knight_attacks(void) {
+COLD void init_knight_attacks(void) {
 
   for (int sq = 0; sq < 64; sq++) {
 
@@ -1235,9 +1183,7 @@ static void init_knight_attacks(void) {
 /*}}}*/
 /*{{{  init_bishop_attacks*/
 
-__attribute__((cold))
-
-static void init_bishop_attacks(void) {
+COLD void init_bishop_attacks(void) {
 
   for (int sq = 0; sq < 64; sq++) {
 
@@ -1318,16 +1264,14 @@ static void init_bishop_attacks(void) {
     }
   }
 
-  find_magics(bishop_attacks, "B", 1);
+  find_magics(bishop_attacks, "B", 0);
 
 }
 
 /*}}}*/
 /*{{{  init_rook_attacks*/
 
-__attribute__((cold))
-
-static void init_rook_attacks(void) {
+COLD void init_rook_attacks(void) {
 
   for (int sq = 0; sq < 64; sq++) {
 
@@ -1412,16 +1356,14 @@ static void init_rook_attacks(void) {
     }
   }
 
-  find_magics(rook_attacks, "R", 1);
+  find_magics(rook_attacks, "R", 0);
 
 }
 
 /*}}}*/
 /*{{{  init_king_attacks*/
 
-__attribute__((cold))
-
-static void init_king_attacks(void) {
+COLD void init_king_attacks(void) {
 
   for (int sq = 0; sq < 64; sq++) {
 
@@ -1446,9 +1388,7 @@ static void init_king_attacks(void) {
 
 /*{{{  is_attacked*/
 
-__attribute__((hot))
-
-static inline int is_attacked(const Position * __restrict pos, const int sq, const int opp) {
+HOT int is_attacked(const Position * __restrict pos, const int sq, const int opp) {
 
   const int base = colour_index(opp);
 
@@ -1486,9 +1426,7 @@ static inline int is_attacked(const Position * __restrict pos, const int sq, con
 
 /*{{{  gen_pawns_white_quiet*/
 
-__attribute__((hot))
-
-static inline void gen_pawns_white_quiet(Node * __restrict node) {
+HOT void gen_pawns_white_quiet(Node * __restrict node) {
 
   const Position *pos = &node->pos;
   const uint64_t pawns    = pos->all[WPAWN];
@@ -1535,9 +1473,7 @@ static inline void gen_pawns_white_quiet(Node * __restrict node) {
 /*}}}*/
 /*{{{  gen_pawns_white_noisy*/
 
-__attribute__((hot))
-
-static inline void gen_pawns_white_noisy(Node * __restrict node) {
+HOT void gen_pawns_white_noisy(Node * __restrict node) {
 
   const Position *pos = &node->pos;
   const uint64_t pawns    = pos->all[WPAWN];
@@ -1608,9 +1544,7 @@ static inline void gen_pawns_white_noisy(Node * __restrict node) {
 
 /*{{{  gen_pawns_black_quiet*/
 
-__attribute__((hot))
-
-static inline void gen_pawns_black_quiet(Node * __restrict node) {
+HOT void gen_pawns_black_quiet(Node * __restrict node) {
 
   const Position *pos = &node->pos;
   const uint64_t pawns    = pos->all[BPAWN];
@@ -1657,9 +1591,7 @@ static inline void gen_pawns_black_quiet(Node * __restrict node) {
 /*}}}*/
 /*{{{  gen_pawns_black_noisy*/
 
-__attribute__((hot))
-
-static inline void gen_pawns_black_noisy(Node * __restrict node) {
+HOT void gen_pawns_black_noisy(Node * __restrict node) {
 
   const Position *pos = &node->pos;
   const uint64_t pawns    = pos->all[BPAWN];
@@ -1728,18 +1660,14 @@ static inline void gen_pawns_black_noisy(Node * __restrict node) {
 
 /*}}}*/
 
-__attribute__((always_inline, hot))
-
-static inline void gen_pawns_quiet(Node * __restrict node) {
+INLINE_HOT void gen_pawns_quiet(Node * __restrict node) {
   if (node->pos.stm == WHITE)
     gen_pawns_white_quiet(node);
   else
     gen_pawns_black_quiet(node);
 }
 
-__attribute__((always_inline, hot))
-
-static inline void gen_pawns_noisy(Node * __restrict node) {
+INLINE_HOT void gen_pawns_noisy(Node * __restrict node) {
   if (node->pos.stm == WHITE)
     gen_pawns_white_noisy(node);
   else
@@ -1749,9 +1677,7 @@ static inline void gen_pawns_noisy(Node * __restrict node) {
 /*}}}*/
 /*{{{  gen_jumpers*/
 
-__attribute__((hot))
-
-static void gen_jumpers(Node * __restrict node, const uint64_t *attack_table, const int piece, const int64_t targets) {
+HOT void gen_jumpers(Node * __restrict node, const uint64_t *attack_table, const int piece, const int64_t targets) {
 
   const Position *pos = &node->pos;
   const int stm = pos->stm;
@@ -1779,9 +1705,7 @@ static void gen_jumpers(Node * __restrict node, const uint64_t *attack_table, co
 /*}}}*/
 /*{{{  gen_sliders*/
 
-__attribute__((hot))
-
-static void gen_sliders(Node * __restrict node, Attack * __restrict attack_table, const int piece, const int64_t targets) {
+HOT void gen_sliders(Node * __restrict node, Attack * __restrict attack_table, const int piece, const int64_t targets) {
 
   const Position *pos = &node->pos;
   const int stm = pos->stm;
@@ -1814,9 +1738,7 @@ static void gen_sliders(Node * __restrict node, Attack * __restrict attack_table
 /*}}}*/
 /*{{{  gen_castling*/
 
-__attribute__((hot))
-
-static void gen_castling(Node * __restrict node) {
+HOT void gen_castling(Node * __restrict node) {
 
   const Position *pos = &node->pos;
   const int stm = pos->stm;
@@ -1864,9 +1786,7 @@ static void gen_castling(Node * __restrict node) {
 
 /*{{{  *_next_perft_move*/
 
-__attribute__((hot))
-
-static void init_next_perft_move(Node * __restrict node, const uint8_t in_check) {
+HOT void init_next_perft_move(Node * __restrict node, const uint8_t in_check) {
 
   node->stage = 0;           // unused
   node->in_check = in_check;
@@ -1896,9 +1816,7 @@ static void init_next_perft_move(Node * __restrict node, const uint8_t in_check)
 
 }
 
-__attribute__((always_inline, hot))
-
-static inline uint32_t get_next_perft_move(Node * __restrict node) {
+INLINE_HOT uint32_t get_next_perft_move(Node * __restrict node) {
 
   if (node->next_move == node->num_moves)
     return 0;
@@ -1910,9 +1828,7 @@ static inline uint32_t get_next_perft_move(Node * __restrict node) {
 /*}}}*/
 /*{{{  *_next_qsearch_move*/
 
-__attribute__((hot))
-
-static void init_next_qsearch_move(Node * __restrict node) {
+HOT void init_next_qsearch_move(Node * __restrict node) {
 
   bump_nodes();
 
@@ -1939,9 +1855,7 @@ static void init_next_qsearch_move(Node * __restrict node) {
 
 }
 
-__attribute__((always_inline, hot))
-
-static inline uint32_t get_next_qsearch_move(Node * __restrict node) {
+INLINE_HOT uint32_t get_next_qsearch_move(Node * __restrict node) {
 
   if (node->next_move == node->num_moves)
     return 0;
@@ -1953,11 +1867,7 @@ static inline uint32_t get_next_qsearch_move(Node * __restrict node) {
 /*}}}*/
 /*{{{  *_next_search_move*/
 
-/*{{{  init_next_search_move*/
-
-__attribute__((hot))
-
-static void init_next_search_move(Node * __restrict node, const uint8_t in_check) {
+HOT void init_next_search_move(Node * __restrict node, const uint8_t in_check) {
 
   bump_nodes();
 
@@ -1984,12 +1894,7 @@ static void init_next_search_move(Node * __restrict node, const uint8_t in_check
 
 }
 
-/*}}}*/
-/*{{{  get_next_search_move*/
-
-__attribute__((hot))
-
-static uint32_t get_next_search_move(Node * __restrict node) {
+HOT uint32_t get_next_search_move(Node * __restrict node) {
 
   switch (node->stage) {
 
@@ -2045,8 +1950,6 @@ static uint32_t get_next_search_move(Node * __restrict node) {
 /*}}}*/
 
 /*}}}*/
-
-/*}}}*/
 /*{{{  board*/
 
 /*{{{  make_move*/
@@ -2085,9 +1988,7 @@ static const uint8_t rights_mask[64] = {
 
 /*}}}*/
 
-__attribute__((always_inline, hot))
-
-static inline void make_move(Position * __restrict pos, const uint32_t move) {
+HOT void make_move(Position * __restrict pos, const uint32_t move) {
 
   const int from = (move >> 6) & 0x3F;
   const int to   = move & 0x3F;
@@ -2256,7 +2157,7 @@ static inline void make_move(Position * __restrict pos, const uint32_t move) {
 /*}}}*/
 /*{{{  play_move*/
 
-static void play_move(Node *node, char *uci_move) {
+void play_move(Node *node, char *uci_move) {
 
   char buf[6];
 
@@ -2368,18 +2269,14 @@ static void position(Node * __restrict node, const char *board_fen, const char *
   
   /*}}}*/
 
-
   net_rebuild(node);
-
 
 }
 
 /*}}}*/
 /*{{{  eval*/
 
-__attribute__((hot))
-
-static int eval(Node * __restrict node) {
+HOT int eval(Node * __restrict node) {
 
   const Position* pos = &node->pos;
   const uint64_t *a = pos->all;
@@ -2402,7 +2299,7 @@ static int eval(Node * __restrict node) {
 
 /*{{{  perft*/
 
-static uint64_t perft(int ply, int depth) {
+HOT uint64_t perft(int ply, int depth) {
 
   if (depth == 0)
     return 1;
@@ -2441,9 +2338,7 @@ static uint64_t perft(int ply, int depth) {
 /*}}}*/
 /*{{{  qsearch*/
 
-__attribute__((hot))
-
-static int qsearch(int ply, int alpha, int beta) {
+HOT int qsearch(int ply, int alpha, int beta) {
 
   if (check_tc())
     return 0;
@@ -2505,9 +2400,7 @@ static int qsearch(int ply, int alpha, int beta) {
 /*}}}*/
 /*{{{  search*/
 
-__attribute__((hot))
-
-static int search(int ply, int depth, int alpha, int beta) {
+HOT int search(int ply, int depth, int alpha, int beta) {
 
   if (ply == MAX_PLY) {
     tc.finished = 1;
@@ -3095,9 +2988,7 @@ static void uci_loop(int argc, char **argv) {
 /*}}}*/
 /*{{{  init_once*/
 
-__attribute__((cold))
-
-static int init_once() {
+COLD int init_once() {
 
   tc.quiet = 0;
 
