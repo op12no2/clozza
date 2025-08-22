@@ -8,12 +8,14 @@ CC := clang
 BUILD ?= release
 
 ifeq ($(BUILD),release)
-  CFLAGS := -O3 -flto -march=native 
+  CFLAGS  := -O3 -march=native -flto -fno-semantic-interposition
   LDFLAGS := -flto -fuse-ld=lld
 else ifeq ($(BUILD),debug)
-  CFLAGS := -O0 -g -Wall -Wextra -DDEBUG \
-            -fsanitize=address,undefined,leak \
-            -fno-omit-frame-pointer
+  # Og keeps code “real” while still debuggable; sanitizers catch the nasties.
+  CFLAGS  := -Og -g3 -Wall -Wextra -DDEBUG \
+             -fsanitize=address,undefined,leak \
+             -fno-omit-frame-pointer \
+             -fno-sanitize-recover=all
   LDFLAGS := -fsanitize=address,undefined,leak
 else
   $(error BUILD must be 'release' or 'debug')
