@@ -470,7 +470,7 @@ static int32_t net_h1_b[NET_H1_SIZE]              __attribute__((aligned(64)));
 static int32_t net_o_w [NET_H1_SIZE * 2]          __attribute__((aligned(64)));
 static int32_t net_o_b;
 
-static void (*ue_func)(Node *node);
+static void (*ue_func)(Node *const node);
 static int ue_arg0;
 static int ue_arg1;
 static int ue_arg2;
@@ -513,7 +513,7 @@ int base(const int piece, const int sq) {
 // See also https://github.com/op12no2/clozza/wiki/bullet-notes
 //
 
-int flip_index(int index) {
+int flip_index(const int index) {
 
   int piece  = index / (64 * NET_H1_SIZE);
   int square = (index / NET_H1_SIZE) % 64;
@@ -646,7 +646,7 @@ void net_copy(const Node *const from_node, Node *const to_node) {
 /*}}}*/
 /*{{{  net_rebuild_accs*/
 
-void net_rebuild_accs(Node *node) {
+void net_rebuild_accs(Node *const node) {
 
   memcpy(node->acc1, net_h1_b, sizeof net_h1_b);
   memcpy(node->acc2, net_h1_b, sizeof net_h1_b);
@@ -670,7 +670,7 @@ void net_rebuild_accs(Node *node) {
 /*}}}*/
 /*{{{  net_check*/
 
-void net_check(Node *n1) {
+void net_check(Node *const n1) {
 
   Node n;
   Node *n2 = &n;
@@ -917,11 +917,11 @@ void net_promote (Node *const node) {
 
 void net_ep_capture (Node *const node) {
 
-  const int pawn_piece         = ue_arg0;
-  const int pawn_fr            = ue_arg1;
-  const int pawn_to            = ue_arg2;
-  const int opp_pawn_piece     = ue_arg3;
-  const int opp_pawn_sq        = ue_arg4;
+  const int pawn_piece     = ue_arg0;
+  const int pawn_fr        = ue_arg1;
+  const int pawn_to        = ue_arg2;
+  const int opp_pawn_piece = ue_arg3;
+  const int opp_pawn_sq    = ue_arg4;
 
   int32_t *const a1 = node->acc1;
   int32_t *const a2 = node->acc2;
@@ -1397,14 +1397,14 @@ int is_attacked(const Position *const pos, const int sq, const int opp) {
     const Attack *const a = &bishop_attacks[sq];
     const uint64_t blockers = pos->occupied & a->mask;
     const uint64_t attacks  = a->attacks[magic_index(blockers, a->magic, a->shift)];
-    if (attacks & opp_bq)return 1;
+    if (attacks & opp_bq) return 1;
   }
 
   {
     const Attack *const a = &rook_attacks[sq];
     const uint64_t blockers = pos->occupied & a->mask;
     const uint64_t attacks  = a->attacks[magic_index(blockers, a->magic, a->shift)];
-    if (attacks & opp_rq)return 1;
+    if (attacks & opp_rq) return 1;
   }
 
   return 0;
@@ -1651,14 +1651,14 @@ void gen_pawns_black_noisy(Node *const node) {
 
 /*}}}*/
 
-void gen_pawns_quiet(Node *node) {
+void gen_pawns_quiet(Node *const node) {
   if (node->pos.stm == WHITE)
     gen_pawns_white_quiet(node);
   else
     gen_pawns_black_quiet(node);
 }
 
-void gen_pawns_noisy(Node *node) {
+void gen_pawns_noisy(Node *const node) {
   if (node->pos.stm == WHITE)
     gen_pawns_white_noisy(node);
   else
@@ -1777,7 +1777,7 @@ void gen_castling(Node *const node) {
 
 /*{{{  *_next_search_move*/
 
-void init_next_search_move(Node *node, const uint8_t in_check) {
+void init_next_search_move(Node *const node, const uint8_t in_check) {
 
   bump_nodes();
 
@@ -1804,7 +1804,7 @@ void init_next_search_move(Node *node, const uint8_t in_check) {
 
 }
 
-uint32_t get_next_search_move(Node *node) {
+uint32_t get_next_search_move(Node *const node) {
 
   switch (node->stage) {
 
@@ -1860,7 +1860,7 @@ uint32_t get_next_search_move(Node *node) {
 /*}}}*/
 /*{{{  *_next_qsearch_move*/
 
-void init_next_qsearch_move(Node *node) {
+void init_next_qsearch_move(Node *const node) {
 
   bump_nodes();
 
@@ -1887,7 +1887,7 @@ void init_next_qsearch_move(Node *node) {
 
 }
 
-uint32_t get_next_qsearch_move(Node *node) {
+uint32_t get_next_qsearch_move(Node *const node) {
 
   if (node->next_move == node->num_moves)
     return 0;
@@ -1924,7 +1924,7 @@ void init_zob() {
 /*}}}*/
 /*{{{  position*/
 
-void position(Node *node, const char *board_fen, const char *stm_str, const char *rights_str, const char *ep_str) {
+void position(Node *const node, const char *board_fen, const char *stm_str, const char *rights_str, const char *ep_str) {
 
   Position *const pos = &node->pos;
 
@@ -2318,7 +2318,7 @@ void make_move(Position *const pos, const uint32_t move) {
 /*}}}*/
 /*{{{  play_move*/
 
-void play_move(Node *node, char *uci_move) {
+void play_move(Node *const node, char *uci_move) {
 
   char buf[6];
 
@@ -3074,6 +3074,7 @@ int init_once() {
   printf("info init_once %" PRIu64 "ms\n", elapsed_ms);
 
   return 0;
+
 }
 
 /*}}}*/
