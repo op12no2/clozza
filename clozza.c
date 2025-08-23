@@ -444,7 +444,7 @@ int find_token(char *token, int n, char **tokens) {
 }
 
 /*}}}*/
-/*{{{  zob_piece_index*/
+/*{{{  zob_index*/
 
 int zob_index(const int piece, const int sq) {
 
@@ -841,8 +841,8 @@ void net_capture(Node *const node) {
 
   const int fr_piece = ue_arg0;
   const int fr       = ue_arg1;
-  const int to_piece = ue_arg2;
-  const int to       = ue_arg3;
+  const int to       = ue_arg2;
+  const int to_piece = ue_arg3;
 
   int32_t *const a1 = node->acc1;
   int32_t *const a2 = node->acc2;
@@ -2077,241 +2077,196 @@ static const uint8_t rights_mask[64] = {
 
 void make_move(Position *const pos, const uint32_t move) {
 
-  /*{{{  common*/
-  
-  uint64_t *all = pos->all;
-  uint64_t *colour = pos->colour;
-  uint8_t *board = pos->board;
-  
-  uint8_t rights = pos->rights;
-  uint8_t ep = pos->ep;
+  uint64_t *const all = pos->all;
+  uint64_t *const colour = pos->colour;
+  uint8_t *const board = pos->board;
+
+  int rights = pos->rights;
+  int ep = pos->ep;
   uint64_t hash = pos->hash;
-  
+
   const int from = (move >> 6) & 0x3F;
-  const int to = move & 0x3F;
-  
+  const int to   = move & 0x3F;
+
   const uint64_t from_bb = 1ULL << from;
-  const uint64_t to_bb = 1ULL << to;
-  
+  const uint64_t to_bb   = 1ULL << to;
+
   const int stm = pos->stm;
   const int opp = stm ^ 1;
-  
-  const int from_piece = board[from];
-  const int to_piece = board[to];
-  
-  const uint8_t new_rights = rights & rights_mask[from] & rights_mask[to];
-  
-  hash ^= zob_ep[ep];
-  ep = 0;
-  
-  /*}}}*/
-  /*{{{  quiet*/
-  
-  if ((move & MASK_SPECIAL) == 0 && to_piece == EMPTY) {
-  
-    all[from_piece] &= ~from_bb;
-    colour[stm] &= ~from_bb;
-    board[from] = EMPTY;
-  
-    hash ^= zob_pieces[zob_index(from_piece, from)];
-  
-    all[from_piece] |= to_bb;
-    colour[stm] |= to_bb;
-    board[to] = from_piece;
-  
-    hash ^= zob_pieces[zob_index(from_piece, to)];
-  
-    hash ^= zob_rights[rights];
-    hash ^= zob_rights[new_rights];
-  
-    rights = new_rights;
-  
-    ue_func = net_move;
-    ue_arg0 = from_piece;
-    ue_arg1 = from;
-    ue_arg2 = to;
-  
-    pos->rights = rights;
-    pos->ep = ep;
-    pos->hash = hash ^ zob_stm;
-    pos->stm = (uint8_t)opp;
-    pos->occupied = colour[WHITE] | colour[BLACK];
-  
-    return;
-  
-  }
-  
-  /*}}}*/
-  /*{{{  noisy*/
-  
-  if ((move & MASK_SPECIAL) == 0 && to_piece != EMPTY) {
-  
-    all[from_piece] &= ~from_bb;
-    colour[stm] &= ~from_bb;
-    board[from] = EMPTY;
-  
-    hash ^= zob_pieces[zob_index(from_piece, from)];
-  
-    all[to_piece] &= ~to_bb;
-    colour[opp] &= ~to_bb;
-  
-    hash ^= zob_pieces[zob_index(to_piece, to)];
-  
-    all[from_piece] |= to_bb;
-    colour[stm] |= to_bb;
-    board[to] = from_piece;
-  
-    hash ^= zob_pieces[zob_index(from_piece, to)];
-  
-    hash ^= zob_rights[rights];
-    hash ^= zob_rights[new_rights];
-  
-    rights = new_rights;
-  
-    ue_func = net_capture;
-    ue_arg0 = from_piece;
-    ue_arg1 = from;
-    ue_arg2 = to_piece;
-    ue_arg3 = to;
-  
-    pos->rights = rights;
-    pos->ep = ep;
-    pos->hash = hash ^ zob_stm;
-    pos->stm = (uint8_t)opp;
-    pos->occupied = colour[WHITE] | colour[BLACK];
-  
-    return;
-  
-  }
-  
-  /*}}}*/
-  /*{{{  special*/
+
+  const int from_piece = board[from];  // 0-11
+  const int to_piece   = board[to];    // 0-11
+
+  /*{{{  remove from piece*/
   
   all[from_piece] &= ~from_bb;
-  colour[stm] &= ~from_bb;
+  colour[stm]     &= ~from_bb;
+  
   board[from] = EMPTY;
   
   hash ^= zob_pieces[zob_index(from_piece, from)];
   
+  /*}}}*/
+  /*{{{  ue*/
+  
+  ue_func = net_move;  // assume a move - update as needed
+  
+  ue_arg0 = from_piece;
+  ue_arg1 = from;
+  ue_arg2 = to;
+  
+  /*}}}*/
+
   if (to_piece != EMPTY) {
-  
+    /*{{{  remove to piece*/
+    
     all[to_piece] &= ~to_bb;
-    colour[opp] &= ~to_bb;
-  
+    colour[opp]   &= ~to_bb;
+    
     hash ^= zob_pieces[zob_index(to_piece, to)];
-  
+    
+    ue_func = net_capture;
+    
+    ue_arg3 = to_piece;
+    
+    /*}}}*/
   }
+
+  /*{{{  put from piece on to*/
   
-  all[from_piece] |=  to_bb;
-  colour[stm] |=  to_bb;
+  all[from_piece] |= to_bb;
+  colour[stm]     |= to_bb;
+  
   board[to] = from_piece;
   
   hash ^= zob_pieces[zob_index(from_piece, to)];
   
+  /*}}}*/
+  /*{{{  clear ep and update rights*/
+  
+  hash ^= zob_ep[ep];
+  ep = 0;
+  hash ^= zob_ep[ep];
+  
   hash ^= zob_rights[rights];
-  hash ^= zob_rights[new_rights];
-  rights = new_rights;
-  
-  if (move & FLAG_PROMO) {
-  
-    const int pro = piece_index(((move >> PROMO_SHIFT) & 3) + 1, stm);
-  
-    all[from_piece] &= ~to_bb;
-    all[pro] |=  to_bb;
-    board[to] =  pro;
-  
-    hash ^= zob_pieces[zob_index(from_piece, to)];
-    hash ^= zob_pieces[zob_index(pro,        to)];
-  
-    ue_func = net_promote;
-    ue_arg0 = from_piece;
-    ue_arg1 = from;
-    ue_arg2 = to;
-    ue_arg3 = to_piece;
-    ue_arg4 = pro;
-  
-  }
-  
-  else if (move & FLAG_EP_CAPTURE) {
-  
-    const int pawn_sq = to + orth_offset[opp];
-    const uint64_t bb = 1ULL << pawn_sq;
-    const int opp_pawn = piece_index(PAWN, opp);
-  
-    all[opp_pawn] &= ~bb;
-    colour[opp] &= ~bb;
-    board[pawn_sq] = EMPTY;
-  
-    hash ^= zob_pieces[zob_index(opp_pawn, pawn_sq)];
-  
-    ue_func = net_ep_capture;
-    ue_arg0 = from_piece;
-    ue_arg1 = from;
-    ue_arg2 = to;
-    ue_arg3 = opp_pawn;
-    ue_arg4 = pawn_sq;
-  
-  }
-  
-  else if (move & FLAG_PAWN_PUSH) {
-  
-    ep = (uint8_t)(from + orth_offset[stm]);
-  
-    hash ^= zob_ep[ep];
-  
-    ue_func = net_move;
-    ue_arg0 = from_piece;
-    ue_arg1 = from;
-    ue_arg2 = to;
-  
-  }
-  
-  else if (move & FLAG_CASTLE) {
-  
-    const int rook = piece_index(ROOK, stm);
-    const int r_from_sq = rook_from[to];
-    const int r_to_sq = rook_to[to];
-    const uint64_t rfb = 1ULL << r_from_sq;
-    const uint64_t rtb = 1ULL << r_to_sq;
-  
-    all[rook] &= ~rfb;
-    colour[stm] &= ~rfb;
-    board[r_from_sq] =  EMPTY;
-  
-    hash ^= zob_pieces[zob_index(rook, r_from_sq)];
-  
-    all[rook] |= rtb;
-    colour[stm] |= rtb;
-    board[r_to_sq] = rook;
-  
-    hash ^=  zob_pieces[zob_index(rook, r_to_sq)];
-  
-    ue_func = net_castle;
-    ue_arg0 = from_piece;
-    ue_arg1 = from;
-    ue_arg2 = to;
-    ue_arg3 = rook;
-    ue_arg4 = r_from_sq;
-    ue_arg5 = r_to_sq;
-  
-  }
-  
-  else {
-  
-    ue_func = net_move;
-    ue_arg0 = from_piece;
-    ue_arg1 = from;
-    ue_arg2 = to;
-  
-  }
-  
-  pos->rights = rights;
-  pos->ep = ep;
-  pos->hash = hash ^ zob_stm;
-  pos->stm = (uint8_t)opp;
-  pos->occupied = colour[WHITE] | colour[BLACK];
+  rights &= rights_mask[from] & rights_mask[to];
+  hash ^= zob_rights[rights];
   
   /*}}}*/
+
+  if (move & MASK_SPECIAL) {
+    /*{{{  do the extra work*/
+    
+    if (move & FLAG_PROMO) {
+      /*{{{  promo*/
+      
+      const int pro = piece_index(((move >> PROMO_SHIFT) & 3) + 1, stm);
+      
+      all[from_piece] &= ~to_bb;
+      all[pro]        |= to_bb;
+      
+      board[to] = pro;
+      
+      hash ^= zob_pieces[zob_index(from_piece, to)];
+      hash ^= zob_pieces[zob_index(pro, to)];
+      
+      ue_func = net_promote;
+      
+      //ue_arg0 = from_piece;
+      //ue_arg1 = from;
+      //ue_arg2 = to;
+      ue_arg3 = to_piece;
+      ue_arg4 = pro;
+      
+      /*}}}*/
+    }
+    
+    else if (move & FLAG_EP_CAPTURE) {
+      /*{{{  ep*/
+      
+      const int pawn_sq = to + orth_offset[opp];
+      const uint64_t pawn_bb = 1ULL << pawn_sq;
+      const int opp_pawn = piece_index(PAWN, opp);
+      
+      all[opp_pawn] &= ~pawn_bb;
+      colour[opp] &= ~pawn_bb;
+      board[pawn_sq] = EMPTY;
+      
+      hash ^= zob_pieces[zob_index(opp_pawn, pawn_sq)];
+      
+      ue_func = net_ep_capture;
+      
+      //ue_arg0 = from_piece;
+      //ue_arg1 = from;
+      //ue_arg2 = to;
+      ue_arg3 = opp_pawn;
+      ue_arg4 = pawn_sq;
+      
+      /*}}}*/
+    }
+    
+    else if (move & FLAG_PAWN_PUSH) {
+      /*{{{  set ep*/
+      
+      ep = from + orth_offset[stm];
+      
+      hash ^= zob_ep[ep];
+      
+      //ue_func = net_move;
+      
+      //ue_arg0 = from_piece;
+      //ue_arg1 = from;
+      //ue_arg2 = to;
+      
+      /*}}}*/
+    }
+    
+    else if (move & FLAG_CASTLE) {
+      /*{{{  castle*/
+      
+      const int rook = piece_index(ROOK, stm);
+      
+      const uint64_t rook_from_bb = 1ULL << rook_from[to];
+      const uint64_t rook_to_bb   = 1ULL << rook_to[to];
+      
+      const int rook_from_sq = rook_from[to];
+      const int rook_to_sq   = rook_to[to];
+      
+      all[rook]   &= ~rook_from_bb;
+      colour[stm] &= ~rook_from_bb;
+      board[rook_from_sq] = EMPTY;
+      
+      hash ^= zob_pieces[zob_index(rook, rook_from_sq)];
+      
+      all[rook]   |= rook_to_bb;
+      colour[stm] |= rook_to_bb;
+      board[rook_to_sq] = rook;
+      
+      hash ^= zob_pieces[zob_index(rook, rook_to_sq)];
+      
+      ue_func = net_castle;
+      
+      //ue_arg0 = from_piece;
+      //ue_arg1 = from;
+      //ue_arg2 = to;
+      ue_arg3 = rook;
+      ue_arg4 = rook_from_sq;
+      ue_arg5 = rook_to_sq;
+      
+      /*}}}*/
+    }
+    
+    /*}}}*/
+  }
+
+  pos->occupied = colour[WHITE] | colour[BLACK];
+
+  hash ^= zob_stm;
+
+  pos->hash = hash;
+  pos->stm = (uint8_t)opp;
+  pos->rights = (uint8_t)rights;
+  pos->ep = (uint8_t)ep;
 
 }
 
@@ -2382,8 +2337,8 @@ uint64_t perft(const int ply, const int depth) {
       continue;
 
     if (__update_accs_in_perft || __check_everything_in_perft) {
-      net_copy(this_node, next_node);   // rest of copy
-      ue_func(next_node);               // rest of make
+      net_copy(this_node, next_node);
+      ue_func(next_node);
     }
     if (__check_everything_in_perft) {
       net_check(next_node);
@@ -2402,13 +2357,13 @@ uint64_t perft(const int ply, const int depth) {
 
 int qsearch(const int ply, int alpha, const int beta) {
 
-  if (check_tc())
-    return 0;
-
   if (ply == MAX_PLY) {
     tc.finished = 1;
     return 0;
   }
+
+  if (check_tc())
+    return 0;
 
   Node *const this_node = &ss[ply];
   const Position *const this_pos = &this_node->pos;
@@ -2434,14 +2389,14 @@ int qsearch(const int ply, int alpha, const int beta) {
 
   while ((move = get_next_qsearch_move(this_node))) {
 
-    *next_pos = *this_pos;      // copy
-    make_move(next_pos, move);  // make
+    *next_pos = *this_pos;      // pos copy
+    make_move(next_pos, move);  // pos update
 
     if (is_attacked(next_pos, bsf(*next_stm_king_ptr), opp))
       continue;
 
-    net_copy(this_node, next_node);   // rest of copy
-    ue_func(next_node);               // rest of make
+    net_copy(this_node, next_node);   // acc copy
+    ue_func(next_node);               // acc update
 
     if (__check_everything_in_qsearch) {
       net_check(next_node);
@@ -2501,14 +2456,14 @@ int search(const int ply, int depth, int alpha, const int beta) {
 
   while ((move = get_next_search_move(this_node))) {
 
-    *next_pos = *this_pos;            // copy
-    make_move(next_pos, move);        // make
+    *next_pos = *this_pos;            // pos copy
+    make_move(next_pos, move);        // pos update
 
     if (is_attacked(next_pos, bsf(*next_stm_king_ptr), opp))
       continue;
 
-    net_copy(this_node, next_node);   // rest of copy
-    ue_func(next_node);               // rest of make
+    net_copy(this_node, next_node);   // acc copy
+    ue_func(next_node);               // acc update
 
     if (__check_everything_in_search) {
       net_check(next_node);
@@ -2923,7 +2878,7 @@ int uci_tokens(int num_tokens, char **tokens) {
       line[sizeof(line) - 1] = '\0';
       uci_exec(line);
     
-      strncpy(line, "go depth 3", sizeof(line) - 1);
+      strncpy(line, "go depth 4", sizeof(line) - 1);
       line[sizeof(line) - 1] = '\0';
       uci_exec(line);
     
