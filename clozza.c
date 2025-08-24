@@ -1,6 +1,4 @@
 
-#define BUILD "8 not released"
-
 const int __update_accs_in_perft = 0;
 const int __check_everything_in_perft = 0;
 const int __check_everything_in_search = 0;
@@ -204,6 +202,19 @@ static uint64_t zob_ep[64];
 
 /*{{{  utility*/
 
+/*{{{  mylog*/
+
+void mylog(const char *const str) {
+
+  FILE *f = fopen("clozza.log", "a");
+  if (!f)
+    return;
+  fprintf(f, "%s\n", str);
+  fclose(f);
+
+}
+
+/*}}}*/
 /*{{{  now_ms*/
 
 uint64_t now_ms(void) {
@@ -457,7 +468,7 @@ int zob_index(const int piece, const int sq) {
 /*}}}*/
 /*{{{  net*/
 
-#define NET_FILE "../lozza/nets/farm1/lozza-500/quantised.bin"
+#define NET_FILE "/home/xyzzy/lozza/nets/farm1/lozza-500/quantised.bin" // hack
 #define NET_I_SIZE 768
 #define NET_QA 255
 #define NET_QB 64
@@ -2681,7 +2692,7 @@ static const char *const bench_fens[] = {
 
 /*}}}*/
 
-int uci_exec(char *line);
+int uci_exec(char *line_in);
 
 int uci_tokens(int num_tokens, char **tokens) {
 
@@ -2819,8 +2830,8 @@ int uci_tokens(int num_tokens, char **tokens) {
   else if (!strcmp(cmd, "uci")) {
     /*{{{  uci*/
     
-    printf("id name Naddu %s\n", BUILD);
-    printf("id author Colin Jenkins\n");
+    printf("id name Naddu8\n");
+    printf("id author ColinJenkins\n");
     printf("uciok\n");
     
     /*}}}*/
@@ -3026,7 +3037,7 @@ int init_once() {
 
   uint64_t elapsed_ms = now_ms() - start_ms;
 
-  printf("info init_once %" PRIu64 "ms\n", elapsed_ms);
+  //printf("info init_once %" PRIu64 "ms\n", elapsed_ms);
 
   return 0;
 
