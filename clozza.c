@@ -183,6 +183,7 @@ typedef struct {
 /*}}}*/
 /*{{{  globals*/
 
+static uint64_t raw_attacks[107648] __attribute__((aligned(64)));
 static uint64_t pawn_attacks[2][64] __attribute__((aligned(64)));
 static uint64_t knight_attacks[64]  __attribute__((aligned(64)));
 static Attack   bishop_attacks[64]  __attribute__((aligned(64)));
@@ -314,12 +315,12 @@ uint64_t rand64(void) {
 
 void cleanup() {
 
-  for (int sq=0; sq < 64; sq++) {
+  //for (int sq=0; sq < 64; sq++) {
 
-    free(rook_attacks[sq].attacks);
-    free(bishop_attacks[sq].attacks);
+    //free(rook_attacks[sq].attacks);
+    //free(bishop_attacks[sq].attacks);
 
-  }
+  //}
 
 }
 
@@ -1039,99 +1040,88 @@ void get_blockers(Attack *a, uint64_t *blockers) {
 /*}}}*/
 /*{{{  find_magics*/
 
-void find_magics(Attack attacks[64], const char *label, int verbose) {
+#define MAGIC_MAX_SLOTS 4096
+
+void find_magics(Attack attacks[64], const char *label) {
+
+  uint64_t tbl[MAGIC_MAX_SLOTS];
+  uint32_t used[MAGIC_MAX_SLOTS];
+
+  static uint32_t stamp = 1;
+
+  const int verbose = 1;
 
   int total_tries = 0;
+  int total_slots = 0;
 
-  static uint64_t *tbl = NULL;
-  static unsigned *used = NULL;
-  static int cap = 0;
-  static unsigned stamp = 1;
-
-  for (int sq = 0; sq < 64; sq++) {
+  for (int sq = 0; sq < 64; ++sq) {
 
     Attack *a = &attacks[sq];
+    const int N = a->count;
 
-    uint64_t blockers[a->count];
+    uint64_t blockers[MAGIC_MAX_SLOTS];
     get_blockers(a, blockers);
 
-    if (a->count > cap) {
-      free(tbl);
-      free(used);
-      cap = a->count;
-      tbl  = (uint64_t*)malloc((size_t)cap * sizeof(uint64_t));
-      used = (unsigned*)malloc((size_t)cap * sizeof(unsigned));
-      if (!tbl || !used) {
-        fprintf(stderr, "cannot malloc tbp or used\n");
-        cleanup();
-        abort();
-      }
-      memset(used, 0, (size_t)cap * sizeof(unsigned));
-    }
+    memset(used, 0, (size_t)N * sizeof used[0]);
 
     int tries = 0;
 
     for (;;) {
 
-      tries++;
+      ++tries;
 
       if (++stamp == 0) {
-        memset(used, 0, (size_t)cap * sizeof(unsigned));
+        memset(used, 0, (size_t)N * sizeof used[0]);
         stamp = 1;
       }
 
-      uint64_t magic = rand64() & rand64() & rand64();
+      const uint64_t magic = rand64() & rand64() & rand64();
 
-      if (popcount((a->mask * magic) >> (64 - a->bits)) < a->bits - 3) // 3 found by trial and error
+      if (popcount((a->mask * magic) >> (64 - a->bits)) < a->bits - 3)
         continue;
 
       int fail = 0;
 
-      for (int i = 0; i < a->count; i++) {
+      for (int i = 0; i < N; ++i) {
 
-        uint64_t blocker = blockers[i];
-        uint64_t attack  = a->attacks[i];
+        const int idx = magic_index(blockers[i], magic, a->shift);
+        const uint64_t att = a->attacks[i];
 
-        int index = magic_index(blocker, magic, a->shift);
-
-        if (used[index] != stamp) {
-          used[index] = stamp;
-          tbl[index]  = attack;
+        if (used[idx] != stamp) {
+          used[idx] = stamp;
+          tbl[idx]  = att;
         }
-        else if (tbl[index] != attack) {
+        else if (tbl[idx] != att) {
           fail = 1;
           break;
         }
       }
 
       if (!fail) {
+
         a->magic = magic;
 
-        free(a->attacks);
-        a->attacks = (uint64_t*)malloc((size_t)a->count * sizeof(uint64_t));
-
-        for (int i = 0; i < a->count; i++) {
-          a->attacks[i] = (used[i] == stamp) ? tbl[i] : 0ULL;
+        for (int i = 0; i < N; ++i) {
+          const int idx = magic_index(blockers[i], magic, a->shift);
+          a->attacks[idx] = tbl[idx];
         }
 
         if (verbose) {
-          printf("%s sq %2d tries %8d magic 0x%016llx\n",
-                 label, sq, tries, (unsigned long long)a->magic);
+          printf("%s sq %2d tries %d %8d magic %" PRIx64 "\n",
+                 label, sq, tries, N, a->magic);
         }
 
         total_tries += tries;
+        total_slots += N;
+
         break;
+
       }
     }
   }
 
-  if (verbose) {
-    printf("%s total_tries %d\n", label, total_tries);
-  }
-
-  free(tbl);  tbl = NULL;
-  free(used); used = NULL;
-  cap = 0;
+  if (verbose)
+    printf("%s total_tries %d total_slots %d\n", label, total_tries, total_slots);
 
   (void)label;
 
@@ -1187,6 +1177,8 @@ void init_knight_attacks(void) {
 
 void init_bishop_attacks(void) {
 
+  int next_attack_index = 0;
+
   for (int sq = 0; sq < 64; sq++) {
 
     Attack *a = &bishop_attacks[sq];
@@ -1215,19 +1207,13 @@ void init_bishop_attacks(void) {
     a->bits = popcount(a->mask);
     a->shift = 64 - a->bits;
     a->count = 1 << a->bits;
-
-    a->attacks = malloc(a->count * sizeof(uint64_t));
-    if (!a->attacks) {
-      fprintf(stderr, "malloc failed for bishop_attacks[%d]\n", sq);
-      cleanup();
-      exit(1);
-    }
+    a->attacks = &raw_attacks[next_attack_index];
 
     uint64_t blockers[a->count];
     get_blockers(a, blockers);
 
     for (int i = 0; i < a->count; i++) {
-      /*{{{  build attacks[i]*/
+      /*{{{  build attacks[next_attack_index]*/
       
       uint64_t blocker = blockers[i];
       uint64_t attack = 0;
@@ -1260,13 +1246,13 @@ void init_bishop_attacks(void) {
           break;
       }
       
-      a->attacks[i] = attack;
+      raw_attacks[next_attack_index++] = attack;
       
       /*}}}*/
     }
   }
 
-  find_magics(bishop_attacks, "B", 0);
+  find_magics(bishop_attacks, "B");
 
 }
 
@@ -1274,6 +1260,8 @@ void init_bishop_attacks(void) {
 /*{{{  init_rook_attacks*/
 
 void init_rook_attacks(void) {
+
+  int next_attack_index = 5248;
 
   for (int sq = 0; sq < 64; sq++) {
 
@@ -1303,19 +1291,13 @@ void init_rook_attacks(void) {
     a->bits = popcount(a->mask);
     a->shift = 64 - a->bits;
     a->count = 1 << a->bits;
-
-    a->attacks = malloc(a->count * sizeof(uint64_t));
-    if (!a->attacks) {
-      fprintf(stderr, "malloc failed for attacks[%d]\n", sq);
-      cleanup();
-      exit(1);
-    }
+    a->attacks = &raw_attacks[next_attack_index];
 
     uint64_t blockers[a->count];
     get_blockers(a, blockers);
 
     for (int i = 0; i < a->count; i++) {
-      /*{{{  build attacks[i]*/
+      /*{{{  build attacks[next_attack_index]*/
       
       uint64_t blocker = blockers[i];
       uint64_t attack = 0;
@@ -1352,13 +1334,13 @@ void init_rook_attacks(void) {
         }
       }
       
-      a->attacks[i] = attack;
+      raw_attacks[next_attack_index++] = attack;
       
       /*}}}*/
     }
   }
 
-  find_magics(rook_attacks, "R", 0);
+  find_magics(rook_attacks, "R");
 
 }
 
@@ -3037,7 +3019,7 @@ int init_once() {
 
   uint64_t elapsed_ms = now_ms() - start_ms;
 
-  //printf("info init_once %" PRIu64 "ms\n", elapsed_ms);
+  printf("info init_once %" PRIu64 "ms\n", elapsed_ms);
 
   return 0;
 
