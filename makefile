@@ -2,7 +2,7 @@
 CC := clang
 
 # --- layout ---
-SRC_DIR   := src
+SRC_DIR   := .
 BUILD_DIR := build
 BIN       := clozza
 
@@ -10,10 +10,13 @@ BIN       := clozza
 BUILD ?= release
 
 ifeq ($(BUILD),release)
-  CFLAGS  := -O3 -march=native -flto -fno-semantic-interposition -MMD -MP
+  CFLAGS  := -O3 -march=native -flto -fno-semantic-interposition
   LDFLAGS := -flto -fuse-ld=lld
+# Allow scripts/CI to inject extra flags (e.g., PGO)
+  CFLAGS  += $(EXTRA_CFLAGS)
+  LDFLAGS += $(EXTRA_LDFLAGS)
 else ifeq ($(BUILD),debug)
-  CFLAGS  := -Og -g3 -Wall -Wextra -DDEBUG -fno-omit-frame-pointer -MMD -MP
+  CFLAGS  := -Og -g3 -Wall -Wextra -DDEBUG -fno-omit-frame-pointer
   LDFLAGS :=
 else
   $(error BUILD must be 'release' or 'debug')
