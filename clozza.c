@@ -1,15 +1,47 @@
 
 /*{{{  includes*/
 
+#include <stdalign.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
 #include <string.h>
-#include <stdint.h>
 #include <inttypes.h> // PRIu64 PRId64 PRIx64
 #include <ctype.h>
 #include <time.h>
 #include <sys/time.h>
+
+/*}}}*/
+/*{{{  macros*/
+
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+  #include <stdalign.h>
+  #define ALIGN64 alignas(64)
+#elif defined(_MSC_VER)
+  #define ALIGN64 __declspec(align(64))
+#else
+  #define ALIGN64 __attribute__((aligned(64)))
+#endif
+
+#if defined(_MSC_VER)
+  #define INLINE_HOT __forceinline
+  #define HOT
+#elif defined(__GNUC__) || defined(__clang__)
+  #define INLINE_HOT inline __attribute__((always_inline, hot))
+  #define HOT __attribute__((hot))
+#else
+  #define INLINE_HOT inline
+  #define HOT
+#endif
+
+#if defined(_MSC_VER)
+#  define RESTRICT __restrict
+#elif defined(__GNUC__) || defined(__clang__)
+#  define RESTRICT __restrict
+#else
+#  define RESTRICT
+#endif
 
 /*}}}*/
 /*{{{  constants*/
@@ -19,6 +51,8 @@
 
 #define INF  30000
 #define MATE 29000
+
+#define MAGIC_MAX_SLOTS 4096
 
 #define NET_H1_SIZE 256
 #define NET_H1_SHIFT 8
@@ -81,41 +115,6 @@ enum {
 };
 
 /*}}}*/
-/*{{{  macros*/
-
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Winitializer-overrides"
-
-#if defined(_MSC_VER)
-  #define INLINE_HOT __forceinline
-  #define HOT
-#elif defined(__GNUC__) || defined(__clang__)
-  #define INLINE_HOT inline __attribute__((always_inline, hot))
-  #define HOT __attribute__((hot))
-#else
-  #define INLINE_HOT inline
-  #define HOT
-#endif
-
-#if defined(__GNUC__) || defined(__clang__)
-#  define RESTRICT __restrict
-#elif defined(_MSC_VER)
-#  define RESTRICT __restrict
-#else
-#  define RESTRICT
-#endif
-
-#define MIN(a,b) \
-  ({ __typeof__ (a) _a = (a); \
-     __typeof__ (b) _b = (b); \
-    _a < _b ? _a : _b; })
-
-#define MAX(a,b) \
-  ({ __typeof__ (a) _a = (a); \
-     __typeof__ (b) _b = (b); \
-    _a > _b ? _a : _b; })
-
-/*}}}*/
 /*{{{  structs*/
 
 /*{{{  Position struct*/
@@ -135,25 +134,25 @@ typedef struct {
 
   uint64_t hash;
 
-} __attribute__((aligned(64))) Position;
+} Position;
 
 /*}}}*/
 /*{{{  Node struct*/
 
 typedef struct {
 
+  ALIGN64 int32_t acc1[NET_H1_SIZE];  // us acc
+  int32_t acc2[NET_H1_SIZE];  // them acc
+  uint32_t moves[MAX_MOVES];
+
   Position pos;
 
-  uint32_t moves[MAX_MOVES];
   int num_moves;
   int next_move;
   uint8_t in_check;
   uint8_t stage;
 
-  int32_t acc1[NET_H1_SIZE] __attribute__((aligned(64)));  // us acc
-  int32_t acc2[NET_H1_SIZE] __attribute__((aligned(64)));  // them acc
-
-} __attribute__((aligned(64))) Node;
+} Node;
 
 /*}}}*/
 /*{{{  Attack struct*/
@@ -169,7 +168,7 @@ typedef struct {
 
   uint64_t *attacks;
 
-} __attribute__((aligned(64))) Attack;
+} Attack;
 
 /*}}}*/
 /*{{{  TimeControl struct*/
@@ -221,66 +220,58 @@ typedef struct {
 
 uint64_t rand64_seed = 0xDEADBEEFCAFEBABEULL;
 
-static uint64_t raw_attacks[107648] __attribute__((aligned(64)));
-static uint64_t pawn_attacks[2][64] __attribute__((aligned(64)));
-static uint64_t knight_attacks[64]  __attribute__((aligned(64)));
-static Attack   bishop_attacks[64]  __attribute__((aligned(64)));
-static Attack   rook_attacks[64]    __attribute__((aligned(64)));
-static uint64_t king_attacks[64]    __attribute__((aligned(64)));
+ALIGN64 uint64_t raw_attacks[107648];
+ALIGN64 uint64_t pawn_attacks[2][64];
+ALIGN64 uint64_t knight_attacks[64];
+ALIGN64 uint64_t king_attacks[64];
 
-static Node ss[MAX_PLY] __attribute__((aligned(64)));
+ALIGN64 Attack bishop_attacks[64];
+ALIGN64 Attack rook_attacks[64];
 
-static TimeControl tc;
+ALIGN64 Node ss[MAX_PLY];
 
-static uint64_t zob_pieces[12 * 64] __attribute__((aligned(64)));
-static uint64_t zob_stm;
-static uint64_t zob_rights[16]      __attribute__((aligned(64)));
-static uint64_t zob_ep[64]          __attribute__((aligned(64)));
+TimeControl tc;
 
-static int32_t net_h1_w[NET_I_SIZE * NET_H1_SIZE] __attribute__((aligned(64)));
-static int32_t net_h2_w[NET_I_SIZE * NET_H1_SIZE] __attribute__((aligned(64)));  // flipped
-static int32_t net_h1_b[NET_H1_SIZE]              __attribute__((aligned(64)));
-static int32_t net_o_w [NET_H1_SIZE * 2]          __attribute__((aligned(64)));
-static int32_t net_o_b;
+ALIGN64 uint64_t zob_pieces[12 * 64];
+uint64_t zob_stm;
+ALIGN64 uint64_t zob_rights[16];
+ALIGN64 uint64_t zob_ep[64];
 
-static void (*ue_func)(Node *const node);
-static int ue_arg0;
-static int ue_arg1;
-static int ue_arg2;
-static int ue_arg3;
-static int ue_arg4;
-static int ue_arg5;
+ALIGN64 int32_t net_h1_w[NET_I_SIZE * NET_H1_SIZE];
+ALIGN64 int32_t net_h2_w[NET_I_SIZE * NET_H1_SIZE];  // flipped
+ALIGN64 int32_t net_h1_b[NET_H1_SIZE];
+ALIGN64 int32_t net_o_w [NET_H1_SIZE * 2];
+int32_t net_o_b;
 
-static const int orth_offset[2] = {8, -8};
+void (*ue_func)(Node *const node);
+int ue_arg0;
+int ue_arg1;
+int ue_arg2;
+int ue_arg3;
+int ue_arg4;
+int ue_arg5;
 
-static const int rook_to[64] = {
+const int orth_offset[2] = {8, -8};
+
+const int rook_to[64] = {
   [G1] = F1,
   [C1] = D1,
   [G8] = F8,
   [C8] = D8,
 };
 
-static const int rook_from[64] = {
+const int rook_from[64] = {
   [G1] = H1,
   [C1] = A1,
   [G8] = H8,
   [C8] = A8,
 };
 
-static const uint8_t rights_mask[64] = {
-  [0 ... 63] = ALL_RIGHTS,
-  [A1] = ALL_RIGHTS & ~WHITE_RIGHTS_QUEEN,
-  [H1] = ALL_RIGHTS & ~WHITE_RIGHTS_KING,
-  [E1] = ALL_RIGHTS & ~(WHITE_RIGHTS_KING | WHITE_RIGHTS_QUEEN),
-
-  [A8] = ALL_RIGHTS & ~BLACK_RIGHTS_QUEEN,
-  [H8] = ALL_RIGHTS & ~BLACK_RIGHTS_KING,
-  [E8] = ALL_RIGHTS & ~(BLACK_RIGHTS_KING | BLACK_RIGHTS_QUEEN)
-};
+int rights_masks[64];
 
 /*{{{  perft data*/
 
-static const Perft perft_data[] = {
+const Perft perft_data[] = {
 
   {"rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR",             "w", "KQkq", "-",  0, 1,         "cpw-pos1-0"},
   {"rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR",             "w", "KQkq", "-",  1, 20,        "cpw-pos1-1"},
@@ -353,7 +344,7 @@ static const Perft perft_data[] = {
 /*}}}*/
 /*{{{  bench data*/
 
-static const Bench bench_data[] = {
+const Bench bench_data[] = {
 
   {"r3k2r/2pb1ppp/2pp1q2/p7/1nP1B3/1P2P3/P2N1PPP/R2QK2R", "w", "KQkq", "a6"},
   {"4rrk1/2p1b1p1/p1p3q1/4p3/2P2n1p/1P1NR2P/PB3PP1/3R1QK1", "b", "-", "-"},
@@ -439,34 +430,9 @@ uint64_t now_ms(void) {
 }
 
 /*}}}*/
-/*{{{  check_tc*/
-
-int check_tc() {
-
-  if (tc.finished)
-    return tc.finished;
-
-  if (tc.bm == 0)
-    return 0;
-
-  if (tc.finish_time) {
-    if (now_ms() >= tc.finish_time)
-      return (tc.finished = 1);
-  }
-
-  else if (tc.max_nodes) {
-    if (tc.nodes >= tc.max_nodes)
-      return (tc.finished = 1);
-  }
-
-  return 0;
-
-}
-
-/*}}}*/
 /*{{{  popcount*/
 
-int popcount(const uint64_t bb) {
+INLINE_HOT int popcount(const uint64_t bb) {
 
   return __builtin_popcountll(bb);
 
@@ -475,7 +441,7 @@ int popcount(const uint64_t bb) {
 /*}}}*/
 /*{{{  encode_move*/
 
-uint32_t encode_move(const int from, const int to, const uint32_t flags) {
+INLINE_HOT uint32_t encode_move(const int from, const int to, const uint32_t flags) {
 
   return (from << 6) | to | flags;
 
@@ -484,7 +450,7 @@ uint32_t encode_move(const int from, const int to, const uint32_t flags) {
 /*}}}*/
 /*{{{  bsf*/
 
-int bsf(const uint64_t bb) {
+INLINE_HOT int bsf(const uint64_t bb) {
 
   return __builtin_ctzll(bb);
 
@@ -506,7 +472,7 @@ uint64_t rand64(void) {
 /*}}}*/
 /*{{{  piece_index*/
 
-int piece_index(const int piece, const int colour) {
+INLINE_HOT int piece_index(const int piece, const int colour) {
 
   return piece + colour * 6;
 
@@ -515,7 +481,7 @@ int piece_index(const int piece, const int colour) {
 /*}}}*/
 /*{{{  colour_index*/
 
-int colour_index(const int colour) {
+INLINE_HOT int colour_index(const int colour) {
 
   return colour * 6;
 
@@ -637,16 +603,101 @@ int find_token(char *token, int n, char **tokens) {
 /*}}}*/
 /*{{{  zob_index*/
 
-int zob_index(const int piece, const int sq) {
+INLINE_HOT int zob_index(const int piece, const int sq) {
 
   return (piece << 6) | sq;
 
 }
 
 /*}}}*/
-/*{{{  base*/
+/*{{{  sqrrelu*/
 
-int base(const int piece, const int sq) {
+INLINE_HOT int32_t sqrelu(const int32_t x) {
+
+  const int32_t y = x & ~(x >> 31);
+
+  return y * y;
+
+}
+
+/*}}}*/
+
+/*}}}*/
+/*{{{  tc*/
+
+/*{{{  tc_init*/
+
+void tc_init(int64_t wtime, int64_t winc, int64_t btime, int64_t binc, int64_t max_nodes, int64_t move_time, int max_depth, int moves_to_go) {
+
+  if (wtime < 0) wtime = 0;
+  if (winc < 0) winc = 0;
+  if (btime < 0) btime = 0;
+  if (binc < 0) binc = 0;
+  if (max_nodes < 0) max_nodes = 0;
+  if (move_time < 0) move_time = 0;
+  if (moves_to_go < 0) moves_to_go = 0;
+
+  tc = (TimeControl){0};
+
+  int stm = ss[0].pos.stm;
+
+  if (!max_nodes && !max_depth && !wtime && !winc && !btime && !binc )
+    move_time = 100;
+
+  if (!moves_to_go)
+    moves_to_go = 30;
+
+  if (!max_depth)
+    max_depth = MAX_PLY;
+
+  if (!move_time && stm == WHITE && wtime)
+    move_time = wtime / moves_to_go + winc / 2;
+  else if (!move_time && stm == BLACK && btime)
+    move_time = btime / moves_to_go + binc / 2;
+
+  if (move_time) {
+    tc.start_time  = now_ms();
+    tc.finish_time = tc.start_time + move_time;
+  }
+
+  tc.max_nodes = max_nodes;
+  tc.max_depth = max_depth;
+
+}
+
+/*}}}*/
+/*{{{  check_tc*/
+
+HOT int check_tc() {
+
+  if (tc.finished)
+    return tc.finished;
+
+  if (tc.bm == 0)
+    return 0;
+
+  if (tc.finish_time) {
+    if (now_ms() >= tc.finish_time)
+      return (tc.finished = 1);
+  }
+
+  else if (tc.max_nodes) {
+    if (tc.nodes >= tc.max_nodes)
+      return (tc.finished = 1);
+  }
+
+  return 0;
+
+}
+
+/*}}}*/
+
+/*}}}*/
+/*{{{  net*/
+
+/*{{{  net_base*/
+
+INLINE_HOT int net_base(const int piece, const int sq) {
 
 #ifdef DEBUG
 
@@ -670,10 +721,6 @@ int base(const int piece, const int sq) {
 }
 
 /*}}}*/
-
-/*}}}*/
-/*{{{  net*/
-
 /*{{{  init_weights*/
 
 /*{{{  flip_index*/
@@ -806,7 +853,7 @@ int init_weights() {
 /*}}}*/
 /*{{{  net_copy*/
 
-void net_copy(const Node *const from_node, Node *const to_node) {
+INLINE_HOT void net_copy(const Node *const from_node, Node *const to_node) {
 
   memcpy(to_node->acc1, from_node->acc1, sizeof from_node->acc1);
   memcpy(to_node->acc2, from_node->acc2, sizeof from_node->acc2);
@@ -838,119 +885,9 @@ void net_rebuild_accs(Node *const node) {
 }
 
 /*}}}*/
-/*{{{  net_check*/
-//hack
-void net_check(Node *const n1) {
-
-  Node n;
-  Node *n2 = &n;
-
-  Position *const pos = &n1->pos;
-
-  /*{{{  check ue*/
-  
-  net_copy(n1, n2);                      // copy the ue accumulators into n2
-  net_rebuild_accs(n1);                  // rebuild the n1 accumulators from scratch
-  
-  for (int i=0; i < NET_H1_SIZE; i++) {  // compare them
-    if (n1->acc1[i] != n2->acc1[i]) {
-      fprintf(stderr, "a1 %d\n", i);
-    }
-    if (n1->acc2[i] != n2->acc2[i]) {
-      fprintf(stderr, "a2 %d\n", i);
-    }
-  }
-  
-  /*}}}*/
-  /*{{{  check bb == board*/
-  
-  uint64_t all[12] = {0};
-  uint64_t colour[2] = {0};
-  uint64_t occupied = 0;
-  
-  for (int sq=0; sq < 64; sq++) {
-    int piece = pos->board[sq];
-    if (piece == EMPTY) continue;
-    all[piece]                         |= (1ULL << sq);
-    colour[piece >= 6 ? BLACK : WHITE] |= (1ULL << sq);
-    occupied                           |= (1ULL << sq);
-  }
-  
-  for (int p = 0; p < 12; p++) {
-    if (all[p] != pos->all[p]) {
-      fprintf(stderr, "verify_from_board: mismatch in all[%d]\n", p);
-    }
-  }
-  
-  if (colour[WHITE] != pos->colour[WHITE]) {
-    fprintf(stderr, "verify_from_board: mismatch in colour[WHITE]\n");
-  }
-  
-  if (colour[BLACK] != pos->colour[BLACK]) {
-    fprintf(stderr, "verify_from_board: mismatch in colour[BLACK]\n");
-  }
-  
-  if (occupied != pos->occupied) {
-    fprintf(stderr, "verify_from_board: mismatch in occupied\n");
-  }
-  
-  /*}}}*/
-  /*{{{  check board == bb*/
-  
-  uint8_t board[64];
-  
-  for (int sq = 0; sq < 64; sq++)
-    board[sq] = EMPTY;
-  
-  for (int p=0; p < 12; p++) {
-    uint64_t bb = pos->all[p];
-    while (bb) {
-      int sq = __builtin_ctzll(bb);
-      board[sq] = p;
-      bb &= bb - 1;
-    }
-  }
-  
-  for (int sq = 0; sq < 64; sq++) {
-    if (board[sq] != pos->board[sq]) {
-      fprintf(stderr, "verify_from_bitboards: mismatch at square %d (expected %d got %d)\n",
-                      sq, pos->board[sq], board[sq]);
-    }
-  }
-  
-  /*}}}*/
-  /*{{{  check hash*/
-  
-  uint64_t hash = 0;
-  
-  for (int sq=0; sq < 64; sq++) {
-    int piece = pos->board[sq];
-    if (piece == EMPTY) continue;
-    hash ^= zob_pieces[zob_index(piece, sq)];
-  }
-  
-  hash ^= zob_rights[n1->pos.rights];
-  hash ^= zob_ep[n1->pos.ep];
-  
-  if (n1->pos.stm == BLACK)
-    hash ^= zob_stm;
-  
-  if (hash != n1->pos.hash)
-    fprintf(stderr, "inc %" PRIx64 " rebuilt %" PRIx64 "\n", n1->pos.hash, hash);
-  
-  /*}}}*/
-
-}
-
-/*}}}*/
 /*{{{  net_eval*/
 
-int32_t sqrelu(const int32_t x) {
-  const int32_t y = x & ~(x >> 31);
-  return y * y;
-}
-
-int32_t net_eval(Node *const node) {
+HOT int32_t net_eval(Node *const node) {
 
   const int stm = node->pos.stm;
 
@@ -979,7 +916,7 @@ int32_t net_eval(Node *const node) {
 
 /*{{{  net_move*/
 
-void net_move(Node *const node) {
+HOT void net_move(Node *const node) {
 
   const int fr_piece = ue_arg0;
   const int fr       = ue_arg1;
@@ -988,8 +925,8 @@ void net_move(Node *const node) {
   int32_t *const RESTRICT a1 = node->acc1;
   int32_t *const RESTRICT a2 = node->acc2;
 
-  const int b1 = base(fr_piece, fr);
-  const int b2 = base(fr_piece, to);
+  const int b1 = net_base(fr_piece, fr);
+  const int b2 = net_base(fr_piece, to);
 
   const int32_t *const RESTRICT w1_b1 = &net_h1_w[b1];
   const int32_t *const RESTRICT w1_b2 = &net_h1_w[b2];
@@ -1007,7 +944,7 @@ void net_move(Node *const node) {
 /*}}}*/
 /*{{{  net_capture*/
 
-void net_capture(Node *const node) {
+HOT void net_capture(Node *const node) {
 
   const int fr_piece = ue_arg0;
   const int fr       = ue_arg1;
@@ -1017,9 +954,9 @@ void net_capture(Node *const node) {
   int32_t *const RESTRICT a1 = node->acc1;
   int32_t *const RESTRICT a2 = node->acc2;
 
-  const int b1 = base(fr_piece, fr);
-  const int b2 = base(to_piece, to);
-  const int b3 = base(fr_piece, to);
+  const int b1 = net_base(fr_piece, fr);
+  const int b2 = net_base(to_piece, to);
+  const int b3 = net_base(fr_piece, to);
 
   const int32_t *const RESTRICT w1_b1 = &net_h1_w[b1];
   const int32_t *const RESTRICT w1_b2 = &net_h1_w[b2];
@@ -1039,7 +976,7 @@ void net_capture(Node *const node) {
 /*}}}*/
 /*{{{  net_promote*/
 
-void net_promote (Node *const node) {
+HOT void net_promote (Node *const node) {
 
   const int pawn_piece    = ue_arg0;
   const int pawn_fr       = ue_arg1;
@@ -1050,8 +987,8 @@ void net_promote (Node *const node) {
   int32_t *const RESTRICT a1 = node->acc1;
   int32_t *const RESTRICT a2 = node->acc2;
 
-  const int b1 = base(pawn_piece, pawn_fr);
-  const int b2 = base(promote_piece, pawn_to);
+  const int b1 = net_base(pawn_piece, pawn_fr);
+  const int b2 = net_base(promote_piece, pawn_to);
 
   const int32_t *const RESTRICT w1_b1 = &net_h1_w[b1];
   const int32_t *const RESTRICT w1_b2 = &net_h1_w[b2];
@@ -1061,7 +998,7 @@ void net_promote (Node *const node) {
 
   if (capture_piece != EMPTY) {
 
-    const int b3 = base(capture_piece, pawn_to);
+    const int b3 = net_base(capture_piece, pawn_to);
     const int32_t *const RESTRICT w1_b3 = &net_h1_w[b3];
     const int32_t *const RESTRICT w2_b3 = &net_h2_w[b3];
 
@@ -1085,7 +1022,7 @@ void net_promote (Node *const node) {
 /*}}}*/
 /*{{{  net_ep_capture*/
 
-void net_ep_capture (Node *const node) {
+HOT void net_ep_capture (Node *const node) {
 
   const int pawn_piece     = ue_arg0;
   const int pawn_fr        = ue_arg1;
@@ -1096,9 +1033,9 @@ void net_ep_capture (Node *const node) {
   int32_t *const RESTRICT a1 = node->acc1;
   int32_t *const RESTRICT a2 = node->acc2;
 
-  const int b1 = base(pawn_piece,     pawn_fr);
-  const int b2 = base(pawn_piece,     pawn_to);
-  const int b3 = base(opp_pawn_piece, opp_pawn_sq);
+  const int b1 = net_base(pawn_piece,     pawn_fr);
+  const int b2 = net_base(pawn_piece,     pawn_to);
+  const int b3 = net_base(opp_pawn_piece, opp_pawn_sq);
 
   const int32_t *const RESTRICT w1_b1 = &net_h1_w[b1];
   const int32_t *const RESTRICT w1_b2 = &net_h1_w[b2];
@@ -1119,7 +1056,7 @@ void net_ep_capture (Node *const node) {
 /*}}}*/
 /*{{{  net_castle*/
 
-void net_castle (Node *const node) {
+HOT void net_castle (Node *const node) {
 
   const int king_piece = ue_arg0;
   const int king_fr    = ue_arg1;
@@ -1131,10 +1068,10 @@ void net_castle (Node *const node) {
   int32_t *const RESTRICT a1 = node->acc1;
   int32_t *const RESTRICT a2 = node->acc2;
 
-  const int b1 = base(king_piece, king_fr);
-  const int b2 = base(king_piece, king_to);
-  const int b3 = base(rook_piece, rook_fr);
-  const int b4 = base(rook_piece, rook_to);
+  const int b1 = net_base(king_piece, king_fr);
+  const int b2 = net_base(king_piece, king_to);
+  const int b3 = net_base(rook_piece, rook_fr);
+  const int b4 = net_base(rook_piece, rook_to);
 
   const int32_t *const RESTRICT w1_b1 = &net_h1_w[b1];
   const int32_t *const RESTRICT w1_b2 = &net_h1_w[b2];
@@ -1160,7 +1097,7 @@ void net_castle (Node *const node) {
 
 /*{{{  magic_index*/
 
-int magic_index(const uint64_t blockers, const uint64_t magic, const int shift) {
+INLINE_HOT int magic_index(const uint64_t blockers, const uint64_t magic, const int shift) {
 
   return (int)((blockers * magic) >> shift);
 
@@ -1197,8 +1134,6 @@ void get_blockers(Attack *a, uint64_t *blockers) {
 
 /*}}}*/
 /*{{{  find_magics*/
-
-#define MAGIC_MAX_SLOTS 4096
 
 void find_magics(Attack attacks[64], const char *label) {
 
@@ -1337,6 +1272,8 @@ void init_bishop_attacks(void) {
 
   int next_attack_index = 0;
 
+  uint64_t blockers[MAGIC_MAX_SLOTS];
+
   for (int sq = 0; sq < 64; sq++) {
 
     Attack *a = &bishop_attacks[sq];
@@ -1367,7 +1304,6 @@ void init_bishop_attacks(void) {
     a->count = 1 << a->bits;
     a->attacks = &raw_attacks[next_attack_index];
 
-    uint64_t blockers[a->count];
     get_blockers(a, blockers);
 
     for (int i = 0; i < a->count; i++) {
@@ -1421,6 +1357,8 @@ void init_rook_attacks(void) {
 
   int next_attack_index = 5248;
 
+  uint64_t blockers[MAGIC_MAX_SLOTS];
+
   for (int sq = 0; sq < 64; sq++) {
 
     Attack *a = &rook_attacks[sq];
@@ -1451,7 +1389,6 @@ void init_rook_attacks(void) {
     a->count = 1 << a->bits;
     a->attacks = &raw_attacks[next_attack_index];
 
-    uint64_t blockers[a->count];
     get_blockers(a, blockers);
 
     for (int i = 0; i < a->count; i++) {
@@ -1528,9 +1465,27 @@ void init_king_attacks(void) {
 
 /*}}}*/
 
+/*{{{  init_rights_masks*/
+
+void init_rights_masks() {
+
+  for (int sq = 0; sq < 64; ++sq)
+    rights_masks[sq] = ALL_RIGHTS;
+
+  rights_masks[A1] &= ~WHITE_RIGHTS_QUEEN;
+  rights_masks[H1] &= ~WHITE_RIGHTS_KING;
+  rights_masks[E1] &= ~(WHITE_RIGHTS_KING | WHITE_RIGHTS_QUEEN);
+
+  rights_masks[A8] &= ~BLACK_RIGHTS_QUEEN;
+  rights_masks[H8] &= ~BLACK_RIGHTS_KING;
+  rights_masks[E8] &= ~(BLACK_RIGHTS_KING | BLACK_RIGHTS_QUEEN);
+
+}
+
+/*}}}*/
 /*{{{  is_attacked*/
 
-int is_attacked(const Position *const pos, const int sq, const int opp) {
+HOT int is_attacked(const Position *const pos, const int sq, const int opp) {
 
   const int base = colour_index(opp);
 
@@ -1955,7 +1910,7 @@ void init_next_search_move(Node *const node, const uint8_t in_check) {
 
 }
 
-uint32_t get_next_search_move(Node *const node) {
+HOT uint32_t get_next_search_move(Node *const node) {
 
   switch (node->stage) {
 
@@ -2038,7 +1993,7 @@ void init_next_qsearch_move(Node *const node) {
 
 }
 
-uint32_t get_next_qsearch_move(Node *const node) {
+HOT uint32_t get_next_qsearch_move(Node *const node) {
 
   if (node->next_move == node->num_moves)
     return 0;
@@ -2174,7 +2129,7 @@ void position(Node *const node, const char *board_fen, const char *stm_str, cons
 /*}}}*/
 /*{{{  eval*/
 
-int eval(Node *const node) {
+HOT int eval(Node *const node) {
 
   const Position *const pos = &node->pos;
   const uint64_t *const a = pos->all;
@@ -2193,7 +2148,7 @@ int eval(Node *const node) {
 /*}}}*/
 /*{{{  make_move*/
 
-void make_move(Position *const pos, const uint32_t move) {
+HOT void make_move(Position *const pos, const uint32_t move) {
 
   uint64_t *const all = pos->all;
   uint64_t *const colour = pos->colour;
@@ -2267,7 +2222,7 @@ void make_move(Position *const pos, const uint32_t move) {
   hash ^= zob_ep[ep];
   
   hash ^= zob_rights[rights];
-  rights &= rights_mask[from] & rights_mask[to];
+  rights &= rights_masks[from] & rights_masks[to];
   hash ^= zob_rights[rights];
   
   /*}}}*/
@@ -2437,6 +2392,8 @@ int qsearch(const int ply, int alpha, const int beta) {
   Node *const this_node = &ss[ply];
   const Position *const this_pos = &this_node->pos;
 
+  //board_check(this_node);
+
   const int stand_pat = eval(this_node);
   if (stand_pat >= beta)
     return beta;
@@ -2509,7 +2466,9 @@ int search(const int ply, int depth, int alpha, const int beta) {
     const int qs = qsearch(ply, alpha, beta);
     return qs;
   }
-  depth = MAX(depth, 0);
+
+  if (depth < 0)
+    depth = 0;
 
   uint32_t move;
   int score = -INF;
@@ -2614,7 +2573,7 @@ void bench () {
 
     const Bench *b = &bench_data[i];
 
-    printf("%s\n", b->fen);
+    printf("%s %s %s %s\n", b->fen, b->stm, b->rights, b->ep);
     position(&ss[0], b->fen, b->stm, b->rights, b->ep);
 
     tc = (TimeControl){0};
@@ -2730,6 +2689,7 @@ int init_once() {
 
   uint64_t start_ms = now_ms();
 
+  init_rights_masks();
   init_zob();
 
   init_pawn_attacks();
@@ -2801,8 +2761,6 @@ int uci_tokens(int num_tokens, char **tokens) {
   }
   else if (!strcmp(cmd, "go") || !strcmp(cmd, "g")) {
     /*{{{  go*/
-    //hack
-    int stm = ss[0].pos.stm;
     
     int64_t wtime = 0;
     int64_t winc = 0;
@@ -2810,8 +2768,8 @@ int uci_tokens(int num_tokens, char **tokens) {
     int64_t binc = 0;
     int64_t max_nodes = 0;
     int64_t move_time = 0;
-    int max_depth = MAX_PLY;
-    int moves_to_go = 30;
+    int max_depth = 0;
+    int moves_to_go = 0;
     
     /*{{{  get the go params*/
     
@@ -2823,38 +2781,38 @@ int uci_tokens(int num_tokens, char **tokens) {
     
       if (!strcmp(token, "wtime")) {
         t++;
-        wtime = MAX(0, atoi(tokens[t]));
+        wtime = atoi(tokens[t]);
       }
       else if (!strcmp(token, "winc")) {
         t++;
-        winc = MAX(0, atoi(tokens[t]));
+        winc = atoi(tokens[t]);
       }
       else if (!strcmp(token, "btime")) {
         t++;
-        btime = MAX(0, atoi(tokens[t]));
+        btime = atoi(tokens[t]);
       }
       else if (!strcmp(token, "binc")) {
         t++;
-        binc = MAX(0, atoi(tokens[t]));
+        binc = atoi(tokens[t]);
       }
       else if (!strcmp(token, "depth") || !strcmp(token, "d")) {
         t++;
-        max_depth = MAX(0, atoi(tokens[t]));
+        max_depth = atoi(tokens[t]);
       }
-      else if (!strcmp(token, "nodes")) {
+      else if (!strcmp(token, "nodes") || !strcmp(token, "n")) {
         t++;
-        max_nodes = MAX(0, atoi(tokens[t]));
+        max_nodes = atoi(tokens[t]);
       }
       else if (!strcmp(token, "movetime") || !strcmp(token, "m")) {
         t++;
-        move_time = MAX(0, atoi(tokens[t]));
+        move_time = atoi(tokens[t]);
       }
       else if (!strcmp(token, "movestogo")) {
         t++;
-        moves_to_go = MAX(0, atoi(tokens[t]));
+        moves_to_go = atoi(tokens[t]);
       }
       else if (!strcmp(token, "infinite")) {
-        ;
+        max_depth = MAX_PLY;
       }
     
       t++;
@@ -2863,27 +2821,7 @@ int uci_tokens(int num_tokens, char **tokens) {
     
     /*}}}*/
     
-    if (!move_time && stm == WHITE && wtime)
-      move_time = MAX(1, move_time / moves_to_go + winc / 2);
-    else if (!move_time && stm == BLACK && btime)
-      move_time = MAX(1, move_time / moves_to_go + binc / 2);
-    
-    if (move_time) {
-      tc.start_time  = now_ms();
-      tc.finish_time = tc.start_time + move_time;
-    }
-    else {
-      tc.start_time  = 0;
-      tc.finish_time = 0;
-    }
-    
-    tc.max_nodes = max_nodes;
-    tc.max_depth = max_depth;
-    
-    tc.nodes    = 0;
-    tc.finished = 0;
-    tc.bm       = 0;
-    tc.bs       = 0;
+    tc_init(wtime, winc, btime, binc, max_nodes, move_time, max_depth, moves_to_go);
     
     go();
     
@@ -2925,8 +2863,8 @@ int uci_tokens(int num_tokens, char **tokens) {
     total_nodes += num_nodes;
     
     uint64_t end_ms     = now_ms();
-    uint64_t elapsed_ms = MAX(1, end_ms - start_ms);
-    uint64_t nps        = (total_nodes * 1000ULL) / elapsed_ms;
+    uint64_t elapsed_ms = end_ms - start_ms;
+    uint64_t nps        = (total_nodes * 1000ULL) / (elapsed_ms ? elapsed_ms : 1);
     
     printf("time %" PRIu64 " nodes %" PRIu64 " nps %" PRIu64 "\n", elapsed_ms, total_nodes, nps);
     
@@ -3002,6 +2940,115 @@ void uci_loop(int argc, char **argv) {
     if (uci_exec(chunk))
       return;
   }
+
+}
+
+/*}}}*/
+
+/*}}}*/
+/*{{{  debug*/
+
+/*{{{  debug_board_check*/
+
+void debug_board_check(Node *const n1) {
+
+  Node n;
+  Node *n2 = &n;
+
+  Position *const pos = &n1->pos;
+
+  /*{{{  check ue*/
+  
+  net_copy(n1, n2);                      // copy the ue accumulators into n2
+  net_rebuild_accs(n1);                  // rebuild the n1 accumulators from scratch
+  
+  for (int i=0; i < NET_H1_SIZE; i++) {  // compare them
+    if (n1->acc1[i] != n2->acc1[i]) {
+      fprintf(stderr, "a1 %d\n", i);
+    }
+    if (n1->acc2[i] != n2->acc2[i]) {
+      fprintf(stderr, "a2 %d\n", i);
+    }
+  }
+  
+  /*}}}*/
+  /*{{{  check bb == board*/
+  
+  uint64_t all[12] = {0};
+  uint64_t colour[2] = {0};
+  uint64_t occupied = 0;
+  
+  for (int sq=0; sq < 64; sq++) {
+    int piece = pos->board[sq];
+    if (piece == EMPTY) continue;
+    all[piece]                         |= (1ULL << sq);
+    colour[piece >= 6 ? BLACK : WHITE] |= (1ULL << sq);
+    occupied                           |= (1ULL << sq);
+  }
+  
+  for (int p = 0; p < 12; p++) {
+    if (all[p] != pos->all[p]) {
+      fprintf(stderr, "verify_from_board: mismatch in all[%d]\n", p);
+    }
+  }
+  
+  if (colour[WHITE] != pos->colour[WHITE]) {
+    fprintf(stderr, "verify_from_board: mismatch in colour[WHITE]\n");
+  }
+  
+  if (colour[BLACK] != pos->colour[BLACK]) {
+    fprintf(stderr, "verify_from_board: mismatch in colour[BLACK]\n");
+  }
+  
+  if (occupied != pos->occupied) {
+    fprintf(stderr, "verify_from_board: mismatch in occupied\n");
+  }
+  
+  /*}}}*/
+  /*{{{  check board == bb*/
+  
+  uint8_t board[64];
+  
+  for (int sq = 0; sq < 64; sq++)
+    board[sq] = EMPTY;
+  
+  for (int p=0; p < 12; p++) {
+    uint64_t bb = pos->all[p];
+    while (bb) {
+      int sq = __builtin_ctzll(bb);
+      board[sq] = p;
+      bb &= bb - 1;
+    }
+  }
+  
+  for (int sq = 0; sq < 64; sq++) {
+    if (board[sq] != pos->board[sq]) {
+      fprintf(stderr, "verify_from_bitboards: mismatch at square %d (expected %d got %d)\n",
+                      sq, pos->board[sq], board[sq]);
+    }
+  }
+  
+  /*}}}*/
+  /*{{{  check hash*/
+  
+  uint64_t hash = 0;
+  
+  for (int sq=0; sq < 64; sq++) {
+    int piece = pos->board[sq];
+    if (piece == EMPTY) continue;
+    hash ^= zob_pieces[zob_index(piece, sq)];
+  }
+  
+  hash ^= zob_rights[n1->pos.rights];
+  hash ^= zob_ep[n1->pos.ep];
+  
+  if (n1->pos.stm == BLACK)
+    hash ^= zob_stm;
+  
+  if (hash != n1->pos.hash)
+    fprintf(stderr, "inc %" PRIx64 " rebuilt %" PRIx64 "\n", n1->pos.hash, hash);
+  
+  /*}}}*/
 
 }
 
