@@ -1,1 +1,15 @@
 
+#include "bb.c"
+#include "board.c"
+#include "magic.c"
+#include "movegen.c"
+#include "net.c"
+#include "node.c"
+#include "perft.c"
+#include "position.c"
+#include "prng.c"
+#include "tc.c"
+#include "uci.c"
+#include "zob.c"
+#include "main.c"
+
