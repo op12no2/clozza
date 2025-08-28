@@ -6,4 +6,4 @@ The only real difference is move generation: Lozza uses mailbox and Clozza uses 
 
 WIP, no releases yet...
 
-The code is best read using a folding editor. Start/end fold markers are ```/*{{{  fold name */``` and ```/*}}}*/```.
+The code is best read using a folding editor. Start/end fold markers are ```/*{{{  fold name*/``` and ```/*}}}*/```.
