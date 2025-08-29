@@ -23,7 +23,7 @@ else
 endif
 
 # --- sources/objects/deps ---
-SRC := $(wildcard $(SRC_DIR)/*.c)
+SRC := $(wildcard $(SRC_DIR)/clozza.c)
 OBJ := $(patsubst $(SRC_DIR)/%.c, $(BUILD_DIR)/%.o, $(SRC))
 DEP := $(OBJ:.o=.d)
 

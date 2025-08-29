@@ -56,7 +56,7 @@
 
 #define NET_H1_SIZE 256
 #define NET_H1_SHIFT 8
-#define NET_FILE "/home/xyzzy/lozza/nets/farm1/lozza-500/quantised.bin" // hack
+#define NET_FILE "quantised.bin"
 #define NET_I_SIZE 768
 #define NET_QA 255
 #define NET_QB 64
@@ -141,11 +141,11 @@ typedef struct {
 
 typedef struct {
 
-  ALIGN64 int32_t acc1[NET_H1_SIZE];  // us acc
-  int32_t acc2[NET_H1_SIZE];  // them acc
-  uint32_t moves[MAX_MOVES];
-
   Position pos;
+
+  ALIGN64 int32_t acc1[NET_H1_SIZE];  // us acc
+  ALIGN64 int32_t acc2[NET_H1_SIZE];  // them acc
+  ALIGN64 uint32_t moves[MAX_MOVES];
 
   int num_moves;
   int next_move;
@@ -233,7 +233,7 @@ ALIGN64 Node ss[MAX_PLY];
 TimeControl tc;
 
 ALIGN64 uint64_t zob_pieces[12 * 64];
-uint64_t zob_stm;
+ALIGN64 uint64_t zob_stm;
 ALIGN64 uint64_t zob_rights[16];
 ALIGN64 uint64_t zob_ep[64];
 
