@@ -112,6 +112,8 @@ enum {WPAWN, WKNIGHT, WBISHOP, WROOK, WQUEEN, WKING, BPAWN, BKNIGHT, BBISHOP, BR
 #define MASK_Q_PROMO_CAPTURE (FLAG_PROMO_CAPTURE | ((QUEEN-1)  << PROMO_SHIFT))
 
 #define MASK_FLAGS (FLAG_MOVE | FLAG_CAPTURE | FLAG_PAWN_PUSH | FLAG_EP_CAPTURE | FLAG_CASTLE | FLAG_PROMO_PUSH | FLAG_PROMO_CAPTURE)
+#define MASK_QUIET (FLAG_MOVE | FLAG_PAWN_PUSH | FLAG_CASTLE | FLAG_PROMO_CAPTURE)
+#define MASK_NOISY (FLAG_CAPTURE | FLAG_EP_CAPTURE | FLAG_PROMO_CAPTURE)
 
 enum {
   A1, B1, C1, D1, E1, F1, G1, H1,
@@ -123,6 +125,8 @@ enum {
   A7, B7, C7, D7, E7, F7, G7, H7,
   A8, B8, C8, D8, E8, F8, G8, H8
 };
+
+#define MAX_HISTORY 32767
 
 /*}}}*/
 /*{{{  structs*/
@@ -156,7 +160,7 @@ typedef struct {
   ALIGN64 int32_t acc1[NET_H1_SIZE];  // us acc
   ALIGN64 int32_t acc2[NET_H1_SIZE];  // them acc
   ALIGN64 uint32_t moves[MAX_MOVES];
-  ALIGN64 uint32_t ranks[MAX_MOVES];
+  ALIGN64 int16_t ranks[MAX_MOVES];
 
   int num_moves;
   int next_move;
@@ -430,6 +434,8 @@ const Bench bench_data[] = {
 
 /*}}}*/
 
+int16_t piece_to_history[12*64];
+
 /*}}}*/
 
 /*{{{  utility*/
@@ -679,10 +685,16 @@ void tc_init(int64_t wtime, int64_t winc, int64_t btime, int64_t binc, int64_t m
   if (!max_depth)
     max_depth = MAX_PLY;
 
-  if (!move_time && stm == WHITE && wtime)
-    move_time = wtime / moves_to_go + winc/2;
-  else if (!move_time && stm == BLACK && btime)
-    move_time = btime / moves_to_go + binc/2;
+  if (!move_time && stm == WHITE && wtime) {
+    move_time = wtime / moves_to_go + winc / 2;
+    if (!move_time)
+      move_time = 1;
+  }
+  else if (!move_time && stm == BLACK && btime) {
+    move_time = btime / moves_to_go + binc / 2;
+    if (!move_time)
+      move_time = 1;
+  }
 
   if (move_time) {
     tc.start_time  = now_ms();
@@ -1928,13 +1940,29 @@ void gen_castling(Node *const node) {
 
 /*}}}*/
 
+/*{{{  update_piece_to_history*/
+
+void update_piece_to_history(const Position *const pos, const uint32_t move, const int16_t bonus) {
+
+  const int from       = (move >> 6) & 0x3F;
+  const int to         = move & 0x3F;
+  const int from_piece = pos->board[from];
+  const int idx        = from_piece << 6 | to;
+
+  piece_to_history[idx] += bonus - piece_to_history[idx] * abs(bonus) / MAX_HISTORY;
+
+  //printf("%d ", piece_to_history[idx]);
+
+}
+
+/*}}}*/
 /*{{{  rank_noisy*/
 
 void rank_noisy(Node *const node) {
 
   const uint8_t *const board = node->pos.board;
   const uint32_t *const moves = node->moves;
-  uint32_t *const ranks = node->ranks;
+  int16_t *const ranks = node->ranks;
 
   const int n = node->num_moves;
 
@@ -1949,6 +1977,32 @@ void rank_noisy(Node *const node) {
     const int to_piece   = board[to] % 6;
 
     ranks[i] = to_piece << 6 | from_piece;
+
+  }
+}
+
+
+/*}}}*/
+/*{{{  rank_quiet*/
+
+void rank_quiet(Node *const node) {
+
+  const uint8_t *const board = node->pos.board;
+  const uint32_t *const moves = node->moves;
+  int16_t *const ranks = node->ranks;
+
+  const int n = node->num_moves;
+
+  for (int i=0; i < n; i++) {
+
+    const uint32_t move = moves[i];
+
+    const int from = (move >> 6) & 0x3F;
+    const int to   = move & 0x3F;
+
+    const int from_piece = board[from];
+
+    ranks[i] = piece_to_history[from_piece << 6 | to];
 
   }
 }
@@ -2001,16 +2055,16 @@ HOT uint32_t get_next_search_move(Node *const node) {
         uint32_t max_m;
       
         uint32_t *const moves = node->moves;
-        uint32_t *const ranks = node->ranks;
+        int16_t *const ranks = node->ranks;
         const int next = node->next_move;
         const int num  = node->num_moves;
       
-        int max_r = -INF;
+        int16_t max_r = -INF;
         int max_i;
       
         for (int i=next; i < num; i++) {
-          if ((int)ranks[i] > max_r) {
-            max_r = (int)ranks[i];
+          if (ranks[i] > max_r) {
+            max_r = ranks[i];
             max_i = i;
           }
         }
@@ -2025,8 +2079,6 @@ HOT uint32_t get_next_search_move(Node *const node) {
         return max_m;
       
       }
-      
-      /*{{{  gen quiets*/
       
       node->stage++;
       node->num_moves = 0;
@@ -2049,7 +2101,7 @@ HOT uint32_t get_next_search_move(Node *const node) {
       if (node->pos.rights && !node->in_check)
         gen_castling(node);
       
-      /*}}}*/
+      rank_quiet(node);
       
       /*}}}*/
     }
@@ -2057,8 +2109,35 @@ HOT uint32_t get_next_search_move(Node *const node) {
     case 1: {
       /*{{{  next quiet*/
       
-      if (node->next_move < node->num_moves)
-        return node->moves[node->next_move++];
+      if (node->next_move < node->num_moves) {
+      
+        uint32_t max_m;
+      
+        uint32_t *const moves = node->moves;
+        int16_t *const ranks = node->ranks;
+        const int next = node->next_move;
+        const int num  = node->num_moves;
+      
+        int16_t max_r = -INF;
+        int max_i;
+      
+        for (int i=next; i < num; i++) {
+          if (ranks[i] > max_r) {
+            max_r = ranks[i];
+            max_i = i;
+          }
+        }
+      
+        max_m = moves[max_i];
+      
+        moves[max_i] = moves[next];
+        ranks[max_i] = ranks[next];
+      
+        node->next_move++;
+      
+        return max_m;
+      
+      }
       
       return 0;
       
@@ -2114,16 +2193,16 @@ HOT uint32_t get_next_qsearch_move(Node *const node) {
   uint32_t max_m;
 
   uint32_t *const moves = node->moves;
-  uint32_t *const ranks = node->ranks;
+  int16_t *const ranks = node->ranks;
   const int next = node->next_move;
   const int num  = node->num_moves;
 
-  int max_r = -INF;
+  int16_t max_r = -INF;
   int max_i;
 
   for (int i=next; i < num; i++) {
-    if ((int)ranks[i] > max_r) {
-      max_r = (int)ranks[i];
+    if (ranks[i] > max_r) {
+      max_r = ranks[i];
       max_i = i;
     }
   }
@@ -2772,6 +2851,8 @@ void position(Node *const node, const char *board_fen, const char *stm_str, cons
 
   net_rebuild_accs(node);
 
+  memset(piece_to_history, 0, sizeof(piece_to_history));
+
 }
 
 /*}}}*/
@@ -3066,6 +3147,8 @@ int search(const int ply, int depth, int alpha, const int beta) {
         tc.bs = score;
       }
       if (score >= beta) {
+        if (move & MASK_QUIET)
+          update_piece_to_history(this_pos, move, depth*depth);
         return score;
       }
     }
@@ -3137,7 +3220,7 @@ void bench () {
     position(&ss[0], b->fen, b->stm, b->rights, b->ep);
 
     tc = (TimeControl){0};
-    tc.max_depth = 5;
+    tc.max_depth = 7;
     go();
 
     total_nodes += tc.nodes;
