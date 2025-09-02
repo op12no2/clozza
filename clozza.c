@@ -578,8 +578,6 @@ char *format_move(const uint32_t move, char *const buf) {
 /*}}}*/
 /*{{{  print_board*/
 
-int32_t net_eval (Node *const node);
-
 void print_board(Node *const node) {
 
   const Position *const pos = &node->pos;
@@ -616,7 +614,6 @@ void print_board(Node *const node) {
   printf("stm=%d\n", pos->stm);
   printf("rights=%d\n", pos->rights);
   printf("ep=%d\n", pos->ep);
-  printf("e=%d\n", net_eval(node));
   printf("h=%" PRIx64 "\n", pos->hash);
 
 }
@@ -1152,7 +1149,78 @@ HOT void net_castle (Node *const node) {
 /*}}}*/
 
 /*}}}*/
-/*{{{  move gen*/
+/*{{{  history*/
+
+/*{{{  update_piece_to_history*/
+
+void update_piece_to_history(const Position *const pos, const uint32_t move, const int16_t bonus) {
+
+  const int from       = (move >> 6) & 0x3F;
+  const int to         = move & 0x3F;
+  const int from_piece = pos->board[from];
+  const int idx        = from_piece << 6 | to;
+
+  piece_to_history[idx] += bonus - piece_to_history[idx] * abs(bonus) / MAX_HISTORY;
+
+  //printf("%d ", piece_to_history[idx]);
+
+}
+
+/*}}}*/
+
+/*{{{  rank_noisy*/
+
+void rank_noisy(Node *const node) {
+
+  const uint8_t *const board = node->pos.board;
+  const uint32_t *const moves = node->moves;
+  int16_t *const ranks = node->ranks;
+
+  const int n = node->num_moves;
+
+  for (int i=0; i < n; i++) {
+
+    const uint32_t m   = moves[i];
+    const int from     = (m >> 6) & 0x3F;
+    const int to       =  m & 0x3F;
+    const int attacker = board[from] % 6;
+    const int victim   = board[to] % 6;
+
+    ranks[i] = (victim << 3) | (5 - attacker);
+
+  }
+}
+
+/*}}}*/
+/*{{{  rank_quiet*/
+
+void rank_quiet(Node *const node) {
+
+  const uint8_t *const board = node->pos.board;
+  const uint32_t *const moves = node->moves;
+  int16_t *const ranks = node->ranks;
+
+  const int n = node->num_moves;
+
+  for (int i=0; i < n; i++) {
+
+    const uint32_t move = moves[i];
+
+    const int from = (move >> 6) & 0x3F;
+    const int to   = move & 0x3F;
+
+    const int from_piece = board[from];
+
+    ranks[i] = piece_to_history[from_piece << 6 | to];
+
+  }
+}
+
+
+/*}}}*/
+
+/*}}}*/
+/*{{{  magics*/
 
 /*{{{  magic_index*/
 
@@ -1523,6 +1591,9 @@ void init_king_attacks(void) {
 }
 
 /*}}}*/
+
+/*}}}*/
+/*{{{  move gen*/
 
 /*{{{  init_rights_masks*/
 
@@ -1940,70 +2011,40 @@ void gen_castling(Node *const node) {
 
 /*}}}*/
 
-/*{{{  update_piece_to_history*/
-
-void update_piece_to_history(const Position *const pos, const uint32_t move, const int16_t bonus) {
-
-  const int from       = (move >> 6) & 0x3F;
-  const int to         = move & 0x3F;
-  const int from_piece = pos->board[from];
-  const int idx        = from_piece << 6 | to;
-
-  piece_to_history[idx] += bonus - piece_to_history[idx] * abs(bonus) / MAX_HISTORY;
-
-  //printf("%d ", piece_to_history[idx]);
-
-}
-
 /*}}}*/
-/*{{{  rank_noisy*/
+/*{{{  move iterators*/
 
-void rank_noisy(Node *const node) {
+/*{{{  get_next_sorted_move*/
 
-  const uint8_t  *const board = node->pos.board;
-  const uint32_t *const moves = node->moves;
-  int16_t        *const ranks = node->ranks;
+INLINE_HOT uint32_t get_next_sorted_move(Node *const node) {
 
-  const int n = node->num_moves;
+  uint32_t max_m;
 
-  for (int i = 0; i < n; i++) {
-
-    const uint32_t m   = moves[i];
-    const int from     = (m >> 6) & 0x3F;
-    const int to       =  m & 0x3F;
-    const int attacker = board[from] % 6;
-    const int victim   = board[to] % 6;
-
-    ranks[i] = (victim << 3) | (5 - attacker);
-
-  }
-}
-
-/*}}}*/
-/*{{{  rank_quiet*/
-
-void rank_quiet(Node *const node) {
-
-  const uint8_t *const board = node->pos.board;
-  const uint32_t *const moves = node->moves;
+  uint32_t *const moves = node->moves;
   int16_t *const ranks = node->ranks;
+  const int next = node->next_move;
+  const int num  = node->num_moves;
 
-  const int n = node->num_moves;
+  int16_t max_r = -INF;
+  int max_i;
 
-  for (int i=0; i < n; i++) {
-
-    const uint32_t move = moves[i];
-
-    const int from = (move >> 6) & 0x3F;
-    const int to   = move & 0x3F;
-
-    const int from_piece = board[from];
-
-    ranks[i] = piece_to_history[from_piece << 6 | to];
-
+  for (int i=next; i < num; i++) {
+    if (ranks[i] > max_r) {
+      max_r = ranks[i];
+      max_i = i;
+    }
   }
-}
 
+  max_m = moves[max_i];
+
+  moves[max_i] = moves[next];
+  ranks[max_i] = ranks[next];
+
+  node->next_move++;
+
+  return max_m;
+
+}
 
 /*}}}*/
 
@@ -2049,31 +2090,7 @@ HOT uint32_t get_next_search_move(Node *const node) {
       
       if (node->next_move < node->num_moves) {
       
-        uint32_t max_m;
-      
-        uint32_t *const moves = node->moves;
-        int16_t *const ranks = node->ranks;
-        const int next = node->next_move;
-        const int num  = node->num_moves;
-      
-        int16_t max_r = -INF;
-        int max_i;
-      
-        for (int i=next; i < num; i++) {
-          if (ranks[i] > max_r) {
-            max_r = ranks[i];
-            max_i = i;
-          }
-        }
-      
-        max_m = moves[max_i];
-      
-        moves[max_i] = moves[next];
-        ranks[max_i] = ranks[next];
-      
-        node->next_move++;
-      
-        return max_m;
+        return get_next_sorted_move(node);
       
       }
       
@@ -2108,31 +2125,7 @@ HOT uint32_t get_next_search_move(Node *const node) {
       
       if (node->next_move < node->num_moves) {
       
-        uint32_t max_m;
-      
-        uint32_t *const moves = node->moves;
-        int16_t *const ranks = node->ranks;
-        const int next = node->next_move;
-        const int num  = node->num_moves;
-      
-        int16_t max_r = -INF;
-        int max_i;
-      
-        for (int i=next; i < num; i++) {
-          if (ranks[i] > max_r) {
-            max_r = ranks[i];
-            max_i = i;
-          }
-        }
-      
-        max_m = moves[max_i];
-      
-        moves[max_i] = moves[next];
-        ranks[max_i] = ranks[next];
-      
-        node->next_move++;
-      
-        return max_m;
+        return get_next_sorted_move(node);
       
       }
       
@@ -2186,32 +2179,8 @@ HOT uint32_t get_next_qsearch_move(Node *const node) {
 
   if (node->next_move == node->num_moves)
     return 0;
-
-  uint32_t max_m;
-
-  uint32_t *const moves = node->moves;
-  int16_t *const ranks = node->ranks;
-  const int next = node->next_move;
-  const int num  = node->num_moves;
-
-  int16_t max_r = -INF;
-  int max_i;
-
-  for (int i=next; i < num; i++) {
-    if (ranks[i] > max_r) {
-      max_r = ranks[i];
-      max_i = i;
-    }
-  }
-
-  max_m = moves[max_i];
-
-  moves[max_i] = moves[next];
-  ranks[max_i] = ranks[next];
-
-  node->next_move++;
-
-  return max_m;
+  else
+    return get_next_sorted_move(node);
 
 }
 
