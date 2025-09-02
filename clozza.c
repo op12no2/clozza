@@ -11,6 +11,7 @@
 #include <ctype.h>
 #include <time.h>
 #include <sys/time.h>
+#include <assert.h>
 
 /*}}}*/
 /*{{{  macros*/
@@ -739,23 +740,6 @@ HOT int check_tc() {
 
 INLINE_HOT int net_base(const int piece, const int sq) {
 
-#ifdef DEBUG
-
-  if (piece == EMPTY) {
-    fprintf(stderr, "piece_index error: piece is EMPTY (%d), square=%d\n", piece, sq);
-    abort();
-  }
-  if (piece < 0 || piece > 11) {
-    fprintf(stderr, "piece_index error: piece out of range (%d), square=%d\n", piece, sq);
-    abort();
-  }
-  if (sq < 0 || sq > 63) {
-    fprintf(stderr, "piece_index error: square out of range (%d), piece=%d\n", sq, piece);
-    abort();
-  }
-
-#endif
-
   return (((piece << 6) | sq) << NET_H1_SHIFT);
 
 }
@@ -844,8 +828,8 @@ int get_weights(const char *path, int16_t **out, size_t *count_out) {
   int16_t *w = (int16_t*)raw;
   size_t count = bytes / sizeof(int16_t);
 
-  *out = w;           // caller must free(*out)
-  *count_out = count; // number of int16 weights
+  *out = w;            // caller must free(*out)
+  *count_out = count;  // number of int16 weights
 
   return 1;
 
@@ -1160,6 +1144,11 @@ void update_piece_to_history(const Position *const pos, const uint32_t move, con
   const int from_piece = pos->board[from];
   const int idx        = from_piece << 6 | to;
 
+  assert(from < 64 && "piece_to_history: from out of bounds+");
+  assert(to < 64 && "piece_to_history: to out of bounds+");
+  assert(idx < (12*64) && "piece_to_history: idx out of bounds+");
+  assert(idx >= 0 && "piece_to_history: idx out of bounds-");
+
   piece_to_history[idx] += bonus - piece_to_history[idx] * abs(bonus) / MAX_HISTORY;
 
   //printf("%d ", piece_to_history[idx]);
@@ -1350,8 +1339,9 @@ void find_magics(Attack attacks[64], const char *label) {
 /*}}}*/
 
 /*{{{  init_pawn_attacks*/
-
-// these are attacks *to* the sq and used in pawn_gen (ep) and is_attacked
+//
+// These are attacks *to* the sq and used in pawn gen (ep) and is_attacked.
+//
 
 void init_pawn_attacks(void) {
 
@@ -1593,7 +1583,7 @@ void init_king_attacks(void) {
 /*}}}*/
 
 /*}}}*/
-/*{{{  move gen*/
+/*{{{  move generation*/
 
 /*{{{  init_rights_masks*/
 
@@ -1684,7 +1674,7 @@ void gen_pawns_white_quiet(Node *const node) {
   /*}}}*/
   /*{{{  push 2*/
   
-  uint64_t two = ((one & RANK_3) << 8) & ~occupied;  // RANK_3 == from squares after first step
+  uint64_t two = ((one & RANK_3) << 8) & ~occupied;
   
   while (two) {
     int to = bsf(two); two &= two - 1;
@@ -2025,7 +2015,7 @@ INLINE_HOT uint32_t get_next_sorted_move(Node *const node) {
   const int next = node->next_move;
   const int num  = node->num_moves;
 
-  int16_t max_r = -INF;
+  int16_t max_r = INT16_MIN;
   int max_i;
 
   for (int i=next; i < num; i++) {
@@ -2039,6 +2029,7 @@ INLINE_HOT uint32_t get_next_sorted_move(Node *const node) {
 
   moves[max_i] = moves[next];
   ranks[max_i] = ranks[next];
+  moves[next]  = max_m;  // for history penalties
 
   node->next_move++;
 
@@ -2187,9 +2178,12 @@ HOT uint32_t get_next_qsearch_move(Node *const node) {
 /*}}}*/
 
 /*}}}*/
-/*{{{  make move*/
+/*{{{  move makers*/
 //
 // pre_ and post_ are in relation to is_attacked() in search() for example.
+// The pre_ functions (called via make_move) update enough for is_attacked
+// (the bitboards) and leave a trail in lazy.* for the the net_ and post_
+// functions to do the rest of the work.
 //
 
 /*{{{  post_move*/
@@ -2684,6 +2678,10 @@ void init_move_funcs(void) {
 
 /*}}}*/
 /*{{{  make_move*/
+//
+// Only one of the relevant move type flags will be set, so
+// it can be used as an index into a table of pre_ functions.
+//
 
 HOT void make_move(Position *const pos, const uint32_t move) {
 
@@ -2868,6 +2866,23 @@ void play_move(Node *const node, char *uci_move) {
 
   fprintf(stderr, "info cannot find uci move %s\n", uci_move);
 
+}
+
+/*}}}*/
+/*{{{  et*/
+
+void et () {
+
+  const int num_fens = 50;
+
+  for (int i=0; i < num_fens; i++) {
+
+    const Bench *b = &bench_data[i];
+    position(&ss[0], b->fen, b->stm, b->rights, b->ep);
+    int e = net_eval(&ss[0]);
+    printf("%d %s %s %s %s\n", e, b->fen, b->stm, b->rights, b->ep);
+
+  }
 }
 
 /*}}}*/
@@ -3113,8 +3128,25 @@ int search(const int ply, int depth, int alpha, const int beta) {
         tc.bs = score;
       }
       if (score >= beta) {
-        if (move & MASK_QUIET)
-          update_piece_to_history(this_pos, move, depth*depth);
+        if (move & MASK_QUIET) {
+          /*{{{  update history*/
+          
+          const int bonus = depth * depth;
+          
+          update_piece_to_history(this_pos, move, bonus);
+          
+          const int limit = this_node->next_move - 1;
+          
+          for (int i=0; i < limit; i++) {
+          
+            assert(move != this_node->moves[i] && "search: last move in limit");
+          
+            update_piece_to_history(this_pos, this_node->moves[i], -bonus);
+          
+          }
+          
+          /*}}}*/
+        }
         return score;
       }
     }
@@ -3199,23 +3231,6 @@ void bench () {
 
   printf("time %" PRIu64 " nodes %" PRIu64 " nps %" PRIu64 "\n", elapsed_ms, total_nodes, nps);
 
-}
-
-/*}}}*/
-/*{{{  et*/
-
-void et () {
-
-  const int num_fens = 50;
-
-  for (int i=0; i < num_fens; i++) {
-
-    const Bench *b = &bench_data[i];
-    position(&ss[0], b->fen, b->stm, b->rights, b->ep);
-    int e = net_eval(&ss[0]);
-    printf("%d %s %s %s %s\n", e, b->fen, b->stm, b->rights, b->ep);
-
-  }
 }
 
 /*}}}*/
