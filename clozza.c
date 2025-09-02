@@ -1960,27 +1960,24 @@ void update_piece_to_history(const Position *const pos, const uint32_t move, con
 
 void rank_noisy(Node *const node) {
 
-  const uint8_t *const board = node->pos.board;
+  const uint8_t  *const board = node->pos.board;
   const uint32_t *const moves = node->moves;
-  int16_t *const ranks = node->ranks;
+  int16_t        *const ranks = node->ranks;
 
   const int n = node->num_moves;
 
-  for (int i=0; i < n; i++) {
+  for (int i = 0; i < n; i++) {
 
-    const uint32_t move = moves[i];
+    const uint32_t m   = moves[i];
+    const int from     = (m >> 6) & 0x3F;
+    const int to       =  m & 0x3F;
+    const int attacker = board[from] % 6;
+    const int victim   = board[to] % 6;
 
-    const int from = (move >> 6) & 0x3F;
-    const int to   = move & 0x3F;
-
-    const int from_piece = board[from] % 6;
-    const int to_piece   = board[to] % 6;
-
-    ranks[i] = to_piece << 6 | from_piece;
+    ranks[i] = (victim << 3) | (5 - attacker);
 
   }
 }
-
 
 /*}}}*/
 /*{{{  rank_quiet*/
