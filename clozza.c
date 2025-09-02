@@ -716,25 +716,27 @@ void tc_init(int64_t wtime, int64_t winc, int64_t btime, int64_t binc, int64_t m
 /*}}}*/
 /*{{{  check_tc*/
 
-HOT int check_tc() {
+HOT void check_tc() {
 
   if (tc.finished)
-    return tc.finished;
+    return;
 
   if (tc.bm == 0)
-    return 0;
+    return;
 
   if (tc.finish_time) {
-    if (now_ms() >= tc.finish_time)
-      return (tc.finished = 1);
+    if (now_ms() >= tc.finish_time) {
+      tc.finished = 1;
+      return;
+    }
   }
 
   else if (tc.max_nodes) {
-    if (tc.nodes >= tc.max_nodes)
-      return (tc.finished = 1);
+    if (tc.nodes >= tc.max_nodes) {
+      tc.finished = 1;
+      return;
+    }
   }
-
-  return 0;
 
 }
 
@@ -2055,8 +2057,6 @@ INLINE_HOT uint32_t get_next_sorted_move(Node *const node) {
 
 void init_next_search_move(Node *const node, const uint8_t in_check) {
 
-  tc.nodes++;
-
   node->stage = 0;
   node->in_check = in_check;
   node->num_moves = 0;
@@ -2148,8 +2148,6 @@ HOT uint32_t get_next_search_move(Node *const node) {
 /*{{{  init_next_qsearch_move*/
 
 void init_next_qsearch_move(Node *const node) {
-
-  tc.nodes++;
 
   node->stage = 0;     // unused
   node->in_check = 0;  // unused
@@ -3032,8 +3030,12 @@ int qsearch(const int ply, int alpha, const int beta) {
     return 0;
   }
 
-  if (check_tc())
-    return 0;
+  tc.nodes++;
+  if ((tc.nodes & 1023) == 0) {
+    check_tc();
+    if (tc.finished)
+      return 0;
+  }
 
   Node *const RESTRICT this_node = &ss[ply];
   const Position *const this_pos = &this_node->pos;
@@ -3093,9 +3095,6 @@ int search(const int ply, int depth, int alpha, const int beta) {
     return 0;
   }
 
-  if (check_tc())
-    return 0;
-
   Node *const RESTRICT this_node = &ss[ply];
   Node *const RESTRICT next_node = &ss[ply + 1];
 
@@ -3110,6 +3109,13 @@ int search(const int ply, int depth, int alpha, const int beta) {
   if (depth <= 0 && in_check == 0) {
     const int qs = qsearch(ply, alpha, beta);
     return qs;
+  }
+
+  tc.nodes++;
+  if ((tc.nodes & 1023) == 0) {
+    check_tc();
+    if (tc.finished)
+      return 0;
   }
 
   if (depth < 0)
