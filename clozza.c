@@ -447,8 +447,15 @@ void mylog(const char *const str) {
 
   FILE *f = fopen("clozza.log", "a");
   if (!f)
-    return;
-  fprintf(f, "%s\n", str);
+      return;
+
+  time_t now = time(NULL);
+  struct tm *t = localtime(&now);
+
+  char buf[32];
+  strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", t);
+
+  fprintf(f, "[%s] %s\n", buf, str);
   fclose(f);
 
 }
@@ -2860,6 +2867,7 @@ void play_move(Node *const node, char *uci_move) {
     if (!strcmp(uci_move, buf)) {
       make_move(pos, move);
       lazy.post_func(pos);
+      lazy.net_func(node);
       return;
     }
   }
@@ -2892,7 +2900,7 @@ void et () {
 
 /*{{{  debug_board_check*/
 
-void debug_board_check(Node *const n1) {
+int debug_board_check(Node *const n1) {
 
   Node n;
   Node *n2 = &n;
@@ -2907,9 +2915,11 @@ void debug_board_check(Node *const n1) {
   for (int i=0; i < NET_H1_SIZE; i++) {  // compare them
     if (n1->acc1[i] != n2->acc1[i]) {
       fprintf(stderr, "a1 %d\n", i);
+      return 1;
     }
     if (n1->acc2[i] != n2->acc2[i]) {
       fprintf(stderr, "a2 %d\n", i);
+      return 1;
     }
   }
   
@@ -2931,19 +2941,23 @@ void debug_board_check(Node *const n1) {
   for (int p = 0; p < 12; p++) {
     if (all[p] != pos->all[p]) {
       fprintf(stderr, "verify_from_board: mismatch in all[%d]\n", p);
+      return 1;
     }
   }
   
   if (colour[WHITE] != pos->colour[WHITE]) {
     fprintf(stderr, "verify_from_board: mismatch in colour[WHITE]\n");
+    return 1;
   }
   
   if (colour[BLACK] != pos->colour[BLACK]) {
     fprintf(stderr, "verify_from_board: mismatch in colour[BLACK]\n");
+    return 1;
   }
   
   if (occupied != pos->occupied) {
     fprintf(stderr, "verify_from_board: mismatch in occupied\n");
+    return 1;
   }
   
   /*}}}*/
@@ -2967,6 +2981,7 @@ void debug_board_check(Node *const n1) {
     if (board[sq] != pos->board[sq]) {
       fprintf(stderr, "verify_from_bitboards: mismatch at square %d (expected %d got %d)\n",
                       sq, pos->board[sq], board[sq]);
+      return 1;
     }
   }
   
@@ -2987,10 +3002,14 @@ void debug_board_check(Node *const n1) {
   if (n1->pos.stm == BLACK)
     hash ^= zob_stm;
   
-  if (hash != n1->pos.hash)
+  if (hash != n1->pos.hash) {
+    return 1;
     fprintf(stderr, "inc %" PRIx64 " rebuilt %" PRIx64 "\n", n1->pos.hash, hash);
+  }
   
   /*}}}*/
+
+  return 0;
 
 }
 
@@ -3168,6 +3187,11 @@ int search(const int ply, int depth, int alpha, const int beta) {
 /*{{{  go*/
 
 void go() {
+
+  if (debug_board_check(&ss[0])) { //hack
+    mylog("debug_board_check");
+    exit(1);
+  }
 
   int alpha = 0;
   int beta  = 0;
