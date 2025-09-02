@@ -1180,7 +1180,12 @@ void rank_noisy(Node *const node) {
     const int from     = (m >> 6) & 0x3F;
     const int to       =  m & 0x3F;
     const int attacker = board[from] % 6;
-    const int victim   = board[to] % 6;
+
+    int victim = board[to];
+    if (victim == EMPTY)  // ep
+      victim = 0;
+    else
+      victim %= 6;
 
     ranks[i] = (victim << 3) | (5 - attacker);
 
