@@ -3025,32 +3025,49 @@ int debug_board_check(Node *const n1) {
 
 int qsearch(const int ply, int alpha, const int beta) {
 
+  /*{{{  housekeeping*/
+  
   if (ply == MAX_PLY) {
+  
     tc.finished = 1;
+  
     return 0;
+  
   }
-
+  
   tc.nodes++;
+  
   if ((tc.nodes & 1023) == 0) {
+  
     check_tc();
+  
     if (tc.finished)
       return 0;
+  
   }
+  
+  /*}}}*/
 
   Node *const RESTRICT this_node = &ss[ply];
   const Position *const this_pos = &this_node->pos;
 
-  const int stand_pat = eval(this_node);
-  if (stand_pat >= beta)
+  /*{{{  stand pat*/
+  
+  const int ev = eval(this_node);
+  
+  if (ev >= beta)
     return beta;
-  if (stand_pat > alpha)
-    alpha = stand_pat;
+  
+  if (ev > alpha)
+    alpha = ev;
+  
+  /*}}}*/
 
   Node *const RESTRICT next_node = &ss[ply+1];
-  Position *const next_pos = &next_node->pos;
+  Position *const next_pos       = &next_node->pos;
 
-  const int stm = this_pos->stm;
-  const int opp = stm ^ 1;
+  const int stm         = this_pos->stm;
+  const int opp         = stm ^ 1;
   const int stm_king_sq = piece_index(KING, stm);
 
   uint32_t move;
@@ -3061,20 +3078,28 @@ int qsearch(const int ply, int alpha, const int beta) {
 
   while ((move = get_next_qsearch_move(this_node))) {
 
+    /*{{{  copy make*/
+    
     *next_pos = *this_pos;
+    
     make_move(next_pos, move);
-
+    
     if (is_attacked(next_pos, bsf(*next_stm_king_ptr), opp))
       continue;
-
+    
     lazy.post_func(next_pos);
+    
     net_copy(this_node, next_node);
+    
     lazy.net_func(next_node);
+    
+    /*}}}*/
 
     const int score = -qsearch(ply+1, -beta, -alpha);
 
-    if (score >= beta)
+    if (score >= beta) {
       return beta;
+    }
 
     if (score > alpha) {
       alpha = score;
@@ -3090,105 +3115,161 @@ int qsearch(const int ply, int alpha, const int beta) {
 
 int search(const int ply, int depth, int alpha, const int beta) {
 
+  /*{{{  housekeeping*/
+  
+  assert (alpha < beta && "search: alpha not less than beta");
+  
   if (ply == MAX_PLY) {
+  
     tc.finished = 1;
+  
     return 0;
+  
   }
+  
+  /*}}}*/
 
   Node *const RESTRICT this_node = &ss[ply];
   Node *const RESTRICT next_node = &ss[ply + 1];
 
   const Position *const this_pos = &this_node->pos;
-  Position *const next_pos = &next_node->pos;
+  Position *const next_pos       = &next_node->pos;
 
-  const int stm = this_pos->stm;
-  const int opp = stm ^ 1;
+  const int stm         = this_pos->stm;
+  const int opp         = stm ^ 1;
   const int stm_king_sq = piece_index(KING, stm);
-  const int in_check = is_attacked(this_pos, bsf(this_pos->all[stm_king_sq]), opp);
+  const int in_check    = is_attacked(this_pos, bsf(this_pos->all[stm_king_sq]), opp);
 
+  /*{{{  horizon*/
+  
   if (depth <= 0 && in_check == 0) {
     const int qs = qsearch(ply, alpha, beta);
     return qs;
   }
-
-  tc.nodes++;
-  if ((tc.nodes & 1023) == 0) {
-    check_tc();
-    if (tc.finished)
-      return 0;
-  }
-
+  
   if (depth < 0)
     depth = 0;
+  
+  /*}}}*/
+  /*{{{  bump nodes*/
+  
+  tc.nodes++;
+  
+  if ((tc.nodes & 1023) == 0) {
+  
+    check_tc();
+  
+    if (tc.finished)
+      return 0;
+  
+  }
+  
+  /*}}}*/
+
+  const int is_root    = ply == 0;
+  const int is_pv      = alpha + 1 != beta;
+  const int orig_alpha = alpha;
 
   uint32_t move;
-  int score = -INF;
+
+  int score           = -INF;
   int num_legal_moves = 0;
 
+  /*{{{  init move iterator*/
+  
   init_next_search_move(this_node, in_check);
-
+  
   const uint64_t *const next_stm_king_ptr = &next_pos->all[stm_king_sq];
+  
+  /*}}}*/
 
   while ((move = get_next_search_move(this_node))) {
 
+    /*{{{  copy make*/
+    
     *next_pos = *this_pos;
+    
     make_move(next_pos, move);
-
+    
     if (is_attacked(next_pos, bsf(*next_stm_king_ptr), opp))
       continue;
-
+    
     lazy.post_func(next_pos);
+    
     net_copy(this_node, next_node);
+    
     lazy.net_func(next_node);
-
+    
     num_legal_moves++;
-
+    
     if (!tc.bm)
       tc.bm = move;
+    
+    /*}}}*/
 
     score = -search(ply+1, depth-1, -beta, -alpha);
 
     if (tc.finished)
       return 0;
 
+    /*{{{  alpha raise*/
+    
     if (score > alpha) {
+    
       alpha = score;
-      if (ply == 0) {
+    
+      if (is_root) {
         tc.bm = move;
         tc.bs = score;
       }
-      if (score >= beta) {
-        if (move & MASK_QUIET) {
-          /*{{{  update history*/
-          
-          const int bonus = depth * depth;
-          
-          update_piece_to_history(this_pos, move, bonus);
-          
-          const int limit = this_node->next_move - 1;
-          
-          for (int i=0; i < limit; i++) {
-          
-            assert(move != this_node->moves[i] && "search: last move in limit");
-          
-            update_piece_to_history(this_pos, this_node->moves[i], -bonus);
-          
-          }
-          
-          /*}}}*/
-        }
-        return score;
-      }
+    
     }
+    
+    /*}}}*/
+    /*{{{  beta raise*/
+    
+    if (score >= beta) {
+    
+      if (move & MASK_QUIET) {
+    
+        /*{{{  update history*/
+        
+        const int bonus = depth * depth;
+        const int limit = this_node->next_move - 1;
+        
+        update_piece_to_history(this_pos, move, bonus);
+        
+        for (int i=0; i < limit; i++) {
+        
+          assert(move != this_node->moves[i] && "search: last move in limit");
+        
+          update_piece_to_history(this_pos, this_node->moves[i], -bonus);
+        
+        }
+        
+        /*}}}*/
+    
+      }
+    
+      return score;
+    
+    }
+    
+    /*}}}*/
+
   }
 
-  if (ply == 0 && num_legal_moves == 1) {
+  /*{{{  mate or stalemate*/
+  
+  if (is_root && num_legal_moves == 1) {
     tc.finished = 1;
   }
-
+  
   if (num_legal_moves == 0) {
     return this_node->in_check ? (-MATE + ply) : 0;
   }
+  
+  /*}}}*/
 
   return alpha;
 
