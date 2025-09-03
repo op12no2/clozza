@@ -129,6 +129,10 @@ enum {
 
 #define MAX_HISTORY 32767
 
+#define TT_EXACT 1
+#define TT_ALPHA 2
+#define TT_BETA 4
+
 /*}}}*/
 /*{{{  structs*/
 
@@ -167,6 +171,7 @@ typedef struct {
   int next_move;
   uint8_t in_check;
   uint8_t stage;
+  uint32_t tt_move;
 
 } Node;
 
@@ -251,6 +256,19 @@ typedef struct {
   int arg5;
 
 } Lazy;
+
+/*}}}*/
+/*{{{  TT*/
+
+typedef struct {
+
+  uint8_t flags;
+  uint8_t depth;
+  int16_t score;
+  uint32_t move;
+  uint64_t hash;
+
+} TT;
 
 /*}}}*/
 
@@ -436,6 +454,10 @@ const Bench bench_data[] = {
 /*}}}*/
 
 int16_t piece_to_history[12*64];
+
+TT *tt = NULL;
+size_t tt_entries = 0;
+size_t tt_mask = 0;
 
 /*}}}*/
 
@@ -661,6 +683,20 @@ INLINE_HOT int32_t sqrelu(const int32_t x) {
 }
 
 /*}}}*/
+/*{{{  log_floor*/
+
+size_t slow_log_floor(size_t n) {
+
+  size_t p = 1;
+
+  while (p <= n)
+    p <<= 1;
+
+  return p >> 1;
+
+}
+
+/*}}}*/
 
 /*}}}*/
 /*{{{  tc*/
@@ -737,6 +773,77 @@ HOT void check_tc() {
       return;
     }
   }
+
+}
+
+/*}}}*/
+
+/*}}}*/
+/*{{{  tt*/
+
+/*{{{  init_tt*/
+
+int init_tt(const size_t megabytes) {
+
+  const size_t bytes = megabytes * 1024ULL * 1024ULL;
+
+  tt_entries = slow_log_floor(bytes / sizeof(TT));
+  tt_mask    = tt_entries - 1;
+  tt         = malloc(tt_entries * sizeof(TT));
+
+  if (!tt) {
+    fprintf(stderr, "Failed to allocate TT\n");
+    return 1;
+  }
+
+  printf("info tt entries %zu\n", tt_entries);
+
+  assert(tt_entries == slow_log_floor(tt_entries) && "init_tt: not a power of 2");
+
+  return 0;
+
+}
+
+/*}}}*/
+/*{{{  tt_reset*/
+
+void tt_reset() {
+
+  memset(tt, 0, tt_entries * sizeof(*tt));
+
+}
+
+/*}}}*/
+/*{{{  tt_put*/
+
+void tt_put(const Position *const pos, const uint8_t flags, const uint8_t depth, const int16_t score, const uint32_t move) {
+
+  const size_t idx         = pos->hash & tt_mask;
+  TT *const RESTRICT entry = &tt[idx];
+
+  entry->depth = depth;
+  entry->score = score;
+  entry->move  = move;
+  entry->hash  = pos->hash;
+  entry->flags = flags;
+
+}
+
+/*}}}*/
+/*{{{  tt_get*/
+
+TT *tt_get(const Position *const pos) {
+
+  const size_t idx         = pos->hash & tt_mask;
+  TT *const RESTRICT entry = &tt[idx];
+
+  if (!entry->flags)
+    return NULL;
+
+  if (entry->hash != pos->hash)
+    return NULL;
+
+  return entry;
 
 }
 
@@ -940,6 +1047,8 @@ HOT int32_t net_eval(Node *const node) {
   acc += net_o_b;
   acc *= NET_SCALE;
   acc /= NET_QAB;
+
+  assert(abs(acc) < INT16_MAX && "eval overflow");
 
   return acc;
 
@@ -2055,41 +2164,65 @@ INLINE_HOT uint32_t get_next_sorted_move(Node *const node) {
 
 /*{{{  init_next_search_move*/
 
-void init_next_search_move(Node *const node, const uint8_t in_check) {
+void init_next_search_move(Node *const node, const uint8_t in_check, const uint32_t tt_move) {
 
-  node->stage = 0;
+  node->stage    = 0;
   node->in_check = in_check;
-  node->num_moves = 0;
-  node->next_move = 0;
-
-  const Position *const pos = &node->pos;
-  const int stm = pos->stm;
-  const int opp = stm ^ 1;
-  const uint64_t opp_king = pos->all[piece_index(KING, opp)];
-  const uint64_t opp_king_near = king_attacks[bsf(opp_king)];
-  const uint64_t enemies = pos->colour[opp] & ~opp_king;
-
-  gen_pawns_noisy(node);
-  gen_jumpers(node, knight_attacks, KNIGHT, enemies, FLAG_CAPTURE);
-  gen_sliders(node, bishop_attacks, BISHOP, enemies, FLAG_CAPTURE);
-  gen_sliders(node, rook_attacks,   ROOK,   enemies, FLAG_CAPTURE);
-  gen_sliders(node, bishop_attacks, QUEEN,  enemies, FLAG_CAPTURE);
-  gen_sliders(node, rook_attacks,   QUEEN,  enemies, FLAG_CAPTURE);
-  gen_jumpers(node, king_attacks,   KING,   enemies & ~opp_king_near, FLAG_CAPTURE);
-
-  rank_noisy(node);
+  node->tt_move  = tt_move;
 
 }
 
 /*}}}*/
 /*{{{  get_next_search_move*/
 
+//hack tt move is also dispatched during the noisy/quiet loop for now
+
 HOT uint32_t get_next_search_move(Node *const node) {
 
   switch (node->stage) {
 
     case 0: {
-      /*{{{  next noisy*/
+      /*{{{  tt*/
+      
+      node->stage++;
+      node->num_moves = 0;
+      node->next_move = 0;
+      
+      if (node->tt_move)
+        return node->tt_move;
+      
+      /*}}}*/
+    }
+
+    case 1: {
+      /*{{{  gen noisy*/
+      
+      node->stage++;
+      node->num_moves = 0;
+      node->next_move = 0;
+      
+      const Position *const pos = &node->pos;
+      const int stm = pos->stm;
+      const int opp = stm ^ 1;
+      const uint64_t opp_king = pos->all[piece_index(KING, opp)];
+      const uint64_t opp_king_near = king_attacks[bsf(opp_king)];
+      const uint64_t enemies = pos->colour[opp] & ~opp_king;
+      
+      gen_pawns_noisy(node);
+      gen_jumpers(node, knight_attacks, KNIGHT, enemies, FLAG_CAPTURE);
+      gen_sliders(node, bishop_attacks, BISHOP, enemies, FLAG_CAPTURE);
+      gen_sliders(node, rook_attacks,   ROOK,   enemies, FLAG_CAPTURE);
+      gen_sliders(node, bishop_attacks, QUEEN,  enemies, FLAG_CAPTURE);
+      gen_sliders(node, rook_attacks,   QUEEN,  enemies, FLAG_CAPTURE);
+      gen_jumpers(node, king_attacks,   KING,   enemies & ~opp_king_near, FLAG_CAPTURE);
+      
+      rank_noisy(node);
+      
+      /*}}}*/
+    }
+
+    case 2: {
+      /*{{{  next noisy / gen quiet*/
       
       if (node->next_move < node->num_moves) {
       
@@ -2123,7 +2256,7 @@ HOT uint32_t get_next_search_move(Node *const node) {
       /*}}}*/
     }
 
-    case 1: {
+    case 3: {
       /*{{{  next quiet*/
       
       if (node->next_move < node->num_moves) {
@@ -2141,6 +2274,7 @@ HOT uint32_t get_next_search_move(Node *const node) {
       fprintf(stderr, "oops\n");
       return 0;
   }
+
 }
 
 /*}}}*/
@@ -2862,7 +2996,7 @@ void play_move(Node *const node, char *uci_move) {
   const int in_check = is_attacked(pos, bsf(pos->all[stm_king_sq]), opp);
   uint32_t move;
 
-  init_next_search_move(node, in_check);
+  init_next_search_move(node, in_check, 0);
 
   while ((move = get_next_search_move(node))) {
 
@@ -2894,6 +3028,37 @@ void et () {
     printf("%d %s %s %s %s\n", e, b->fen, b->stm, b->rights, b->ep);
 
   }
+}
+
+/*}}}*/
+/*{{{  probably_legal*/
+
+HOT uint32_t probably_legal(const Position *pos, uint32_t move) {
+
+  if (!move) {
+    return 0;
+  }
+
+  const int from       = (move >> 6) & 0x3F;
+  const int to         = move & 0x3F;
+  const int from_piece = pos->board[from];
+  const int to_piece   = pos->board[to];
+  const int stm        = pos->stm;
+
+  if (from_piece == EMPTY){
+    return 0;
+  }
+
+  if (from_piece/6 != stm) {
+    return 0;
+  }
+
+  if (to_piece != EMPTY && to_piece/6 == stm) {
+    return 0;
+  }
+
+  return move;
+
 }
 
 /*}}}*/
@@ -3170,14 +3335,37 @@ int search(const int ply, int depth, int alpha, const int beta) {
   const int is_pv      = alpha + 1 != beta;
   const int orig_alpha = alpha;
 
-  uint32_t move;
+  /*{{{  check tt*/
+  
+  const TT *const RESTRICT entry = tt_get(this_pos);
+  
+  uint32_t tt_move = 0;
+  
+  //if (entry && entry->depth >= depth) {
+  
+    //const int flags = entry->flags;
+    //const int score = entry->score;
+  
+    //if (flags == TT_EXACT || (flags == TT_BETA && score >= beta) || (flags == TT_ALPHA && score <= alpha)) {
+    //  return score;
+    //}
+  
+  //}
+  
+  if (entry && entry->move)
+    tt_move = probably_legal(this_pos, entry->move);
+  
+  /*}}}*/
 
-  int score           = -INF;
+  uint32_t move       = 0;
+  uint32_t best_move  = 0;
+  int score           = alpha;
+  int best_score      = alpha;
   int num_legal_moves = 0;
 
   /*{{{  init move iterator*/
   
-  init_next_search_move(this_node, in_check);
+  init_next_search_move(this_node, in_check, tt_move);
   
   const uint64_t *const next_stm_king_ptr = &next_pos->all[stm_king_sq];
   
@@ -3216,11 +3404,15 @@ int search(const int ply, int depth, int alpha, const int beta) {
     
     if (score > alpha) {
     
-      alpha = score;
+      alpha      = score;
+      best_score = score;
+      best_move  = move;
     
       if (is_root) {
-        tc.bm = move;
-        tc.bs = score;
+    
+        tc.bm = best_move;
+        tc.bs = best_score;
+    
       }
     
     }
@@ -3230,26 +3422,28 @@ int search(const int ply, int depth, int alpha, const int beta) {
     
     if (score >= beta) {
     
+      /*{{{  update history*/
+      
       if (move & MASK_QUIET) {
-    
-        /*{{{  update history*/
-        
+      
         const int bonus = depth * depth;
         const int limit = this_node->next_move - 1;
-        
+      
         update_piece_to_history(this_pos, move, bonus);
-        
+      
         for (int i=0; i < limit; i++) {
-        
+      
           assert(move != this_node->moves[i] && "search: last move in limit");
-        
+      
           update_piece_to_history(this_pos, this_node->moves[i], -bonus);
-        
+      
         }
-        
-        /*}}}*/
-    
+      
       }
+      
+      /*}}}*/
+    
+      tt_put(this_pos, TT_BETA, depth, best_score, best_move);
     
       return score;
     
@@ -3271,7 +3465,9 @@ int search(const int ply, int depth, int alpha, const int beta) {
   
   /*}}}*/
 
-  return alpha;
+  tt_put(this_pos, (alpha > orig_alpha ? TT_EXACT : TT_ALPHA), depth, best_score, best_move);
+
+  return best_score;
 
 }
 
@@ -3374,7 +3570,7 @@ uint64_t perft(const int ply, const int depth) {
   uint64_t tot_nodes = 0;
   uint32_t move;
 
-  init_next_search_move(this_node, is_attacked(this_pos, bsf(this_pos->all[stm_king_sq]), opp));
+  init_next_search_move(this_node, is_attacked(this_pos, bsf(this_pos->all[stm_king_sq]), opp), 0);
 
   const uint64_t *const next_stm_king_ptr = &next_pos->all[stm_king_sq];
 
@@ -3444,6 +3640,8 @@ void perft_tests () {
 
 int init_once() {
 
+  assert(INT16_MIN < -MAX_HISTORY && "init_once: max history");
+
   memset(ss, 0, sizeof(ss));
 
   uint64_t start_ms = now_ms();
@@ -3461,6 +3659,10 @@ int init_once() {
 
   if (init_weights())
     return 1;
+
+  if (init_tt(16))  // hack
+    return 1;
+  tt_reset();       // hack
 
   uint64_t elapsed_ms = now_ms() - start_ms;
 
@@ -3518,7 +3720,7 @@ int uci_tokens(int num_tokens, char **tokens) {
   else if (!strcmp(cmd, "ucinewgame") || !strcmp(cmd, "u")) {
     /*{{{  ucinewgame*/
     
-    ;
+    tt_reset();
     
     /*}}}*/
   }
@@ -3726,6 +3928,8 @@ int main(int argc, char **argv) {
   }
 
   uci_loop(argc, argv);
+
+  free(tt);
 
   return 0;
 
