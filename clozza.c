@@ -683,7 +683,7 @@ INLINE_HOT int32_t sqrelu(const int32_t x) {
 }
 
 /*}}}*/
-/*{{{  log_floor*/
+/*{{{  slow_log_floor*/
 
 size_t slow_log_floor(size_t n) {
 
@@ -2127,6 +2127,26 @@ void gen_castling(Node *const node) {
 /*}}}*/
 /*{{{  move iterators*/
 
+/*{{{  remove_tt_move*/
+
+void remove_tt_move(Node *const node) {
+
+  uint32_t *src = node->moves;
+  uint32_t *dst = node->moves;
+
+  int n = node->num_moves;
+
+  for (int i = 0; i < n; i++, src++) {
+
+    if (*src == node->tt_move)
+      node->num_moves--;
+    else
+      *dst++ = *src;
+
+  }
+}
+
+/*}}}*/
 /*{{{  get_next_sorted_move*/
 
 INLINE_HOT uint32_t get_next_sorted_move(Node *const node) {
@@ -2175,8 +2195,6 @@ void init_next_search_move(Node *const node, const uint8_t in_check, const uint3
 /*}}}*/
 /*{{{  get_next_search_move*/
 
-//hack tt move is also dispatched during the noisy/quiet loop for now
-
 HOT uint32_t get_next_search_move(Node *const node) {
 
   switch (node->stage) {
@@ -2216,6 +2234,9 @@ HOT uint32_t get_next_search_move(Node *const node) {
       gen_sliders(node, rook_attacks,   QUEEN,  enemies, FLAG_CAPTURE);
       gen_jumpers(node, king_attacks,   KING,   enemies & ~opp_king_near, FLAG_CAPTURE);
       
+      if (node->tt_move)
+        remove_tt_move(node);
+      
       rank_noisy(node);
       
       /*}}}*/
@@ -2251,6 +2272,9 @@ HOT uint32_t get_next_search_move(Node *const node) {
       if (node->pos.rights && !node->in_check)
         gen_castling(node);
       
+      if (node->tt_move)
+        remove_tt_move(node);
+      
       rank_quiet(node);
       
       /*}}}*/
@@ -2271,39 +2295,21 @@ HOT uint32_t get_next_search_move(Node *const node) {
     }
 
     default:
-      fprintf(stderr, "oops\n");
+      assert(0 && "get_next_search_move: stage problem");
       return 0;
-  }
 
+  }
 }
 
 /*}}}*/
 
 /*{{{  init_next_qsearch_move*/
 
-void init_next_qsearch_move(Node *const node) {
+void init_next_qsearch_move(Node *const node, const uint32_t tt_move) {
 
-  node->stage = 0;     // unused
-  node->in_check = 0;  // unused
-  node->num_moves = 0;
-  node->next_move = 0;
-
-  const Position *const pos = &node->pos;
-  const int stm = pos->stm;
-  const int opp = stm ^ 1;
-  const uint64_t opp_king = pos->all[piece_index(KING, opp)];
-  const uint64_t opp_king_near = king_attacks[bsf(opp_king)];
-  const uint64_t enemies = pos->colour[opp] & ~opp_king;
-
-  gen_pawns_noisy(node);
-  gen_jumpers(node, knight_attacks, KNIGHT, enemies, FLAG_CAPTURE);
-  gen_sliders(node, bishop_attacks, BISHOP, enemies, FLAG_CAPTURE);
-  gen_sliders(node, rook_attacks,   ROOK,   enemies, FLAG_CAPTURE);
-  gen_sliders(node, bishop_attacks, QUEEN,  enemies, FLAG_CAPTURE);
-  gen_sliders(node, rook_attacks,   QUEEN,  enemies, FLAG_CAPTURE);
-  gen_jumpers(node, king_attacks,   KING,   enemies & ~opp_king_near, FLAG_CAPTURE);
-
-  rank_noisy(node);
+  node->stage    = 0;
+  node->in_check = 0;  //unused
+  node->tt_move  = tt_move;
 
 }
 
@@ -2312,14 +2318,74 @@ void init_next_qsearch_move(Node *const node) {
 
 HOT uint32_t get_next_qsearch_move(Node *const node) {
 
-  if (node->next_move == node->num_moves)
-    return 0;
-  else
-    return get_next_sorted_move(node);
+  switch (node->stage) {
 
+    case 0: {
+      /*{{{  tt*/
+      
+      node->stage++;
+      node->num_moves = 0;
+      node->next_move = 0;
+      
+      if (node->tt_move)
+        return node->tt_move;
+      
+      /*}}}*/
+    }
+
+    case 1: {
+      /*{{{  gen noisy*/
+      
+      node->stage++;
+      node->num_moves = 0;
+      node->next_move = 0;
+      
+      const Position *const pos = &node->pos;
+      const int stm = pos->stm;
+      const int opp = stm ^ 1;
+      const uint64_t opp_king = pos->all[piece_index(KING, opp)];
+      const uint64_t opp_king_near = king_attacks[bsf(opp_king)];
+      const uint64_t enemies = pos->colour[opp] & ~opp_king;
+      
+      gen_pawns_noisy(node);
+      gen_jumpers(node, knight_attacks, KNIGHT, enemies, FLAG_CAPTURE);
+      gen_sliders(node, bishop_attacks, BISHOP, enemies, FLAG_CAPTURE);
+      gen_sliders(node, rook_attacks,   ROOK,   enemies, FLAG_CAPTURE);
+      gen_sliders(node, bishop_attacks, QUEEN,  enemies, FLAG_CAPTURE);
+      gen_sliders(node, rook_attacks,   QUEEN,  enemies, FLAG_CAPTURE);
+      gen_jumpers(node, king_attacks,   KING,   enemies & ~opp_king_near, FLAG_CAPTURE);
+      
+      if (node->tt_move)
+        remove_tt_move(node);
+      
+      rank_noisy(node);
+      
+      /*}}}*/
+    }
+
+    case 2: {
+      /*{{{  next noisy*/
+      
+      if (node->next_move < node->num_moves) {
+      
+        return get_next_sorted_move(node);
+      
+      }
+      
+      return 0;
+      
+      /*}}}*/
+    }
+
+    default:
+      assert(0 && "get_next_search_move: stage problem");
+      return 0;
+
+  }
 }
 
 /*}}}*/
+
 
 /*}}}*/
 /*{{{  move makers*/
@@ -3231,13 +3297,35 @@ int qsearch(const int ply, int alpha, const int beta) {
   Node *const RESTRICT next_node = &ss[ply+1];
   Position *const next_pos       = &next_node->pos;
 
+  /*{{{  check tt*/
+  
+  const TT *const RESTRICT entry = tt_get(this_pos);
+  
+  uint32_t tt_move = 0;
+  
+  //if (entry && entry->depth >= depth) {
+  
+    //const int flags = entry->flags;
+    //const int score = entry->score;
+  
+    //if (flags == TT_EXACT || (flags == TT_BETA && score >= beta) || (flags == TT_ALPHA && score <= alpha)) {
+    //  return score;
+    //}
+  
+  //}
+  
+  if (entry && entry->move)
+    tt_move = probably_legal(this_pos, entry->move);
+  
+  /*}}}*/
+
   const int stm         = this_pos->stm;
   const int opp         = stm ^ 1;
   const int stm_king_sq = piece_index(KING, stm);
 
   uint32_t move;
 
-  init_next_qsearch_move(this_node);
+  init_next_qsearch_move(this_node, tt_move);
 
   const uint64_t *const next_stm_king_ptr = &next_pos->all[stm_king_sq];
 
