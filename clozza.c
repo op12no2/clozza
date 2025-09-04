@@ -2124,6 +2124,64 @@ void gen_castling(Node *const node) {
 
 /*}}}*/
 
+/*{{{  gen_noisy*/
+
+void gen_noisy(Node *const node) {
+
+  const Position *const pos    = &node->pos;
+  const int stm                = pos->stm;
+  const int opp                = stm ^ 1;
+  const uint64_t opp_king      = pos->all[piece_index(KING, opp)];
+  const uint64_t opp_king_near = king_attacks[bsf(opp_king)];
+  const uint64_t enemies       = pos->colour[opp] & ~opp_king;
+
+  gen_pawns_noisy(node);
+
+  gen_jumpers(node, knight_attacks, KNIGHT, enemies, FLAG_CAPTURE);
+
+  gen_sliders(node, bishop_attacks, BISHOP, enemies, FLAG_CAPTURE);
+
+  gen_sliders(node, rook_attacks,   ROOK,   enemies, FLAG_CAPTURE);
+
+  gen_sliders(node, bishop_attacks, QUEEN,  enemies, FLAG_CAPTURE);
+  gen_sliders(node, rook_attacks,   QUEEN,  enemies, FLAG_CAPTURE);
+
+  gen_jumpers(node, king_attacks,   KING,   enemies & ~opp_king_near, FLAG_CAPTURE);
+
+}
+
+/*}}}*/
+/*{{{  gen_quiet*/
+
+void gen_quiet(Node *const node) {
+
+  const Position *const pos    = &node->pos;
+  const int stm                = pos->stm;
+  const int opp                = stm ^ 1;
+  const uint64_t occ           = pos->occupied;
+  const uint64_t opp_king      = pos->all[piece_index(KING, opp)];
+  const uint64_t opp_king_near = king_attacks[bsf(opp_king)];
+
+  gen_pawns_quiet(node);
+
+  gen_jumpers(node, knight_attacks, KNIGHT, ~occ, FLAG_MOVE);
+
+  gen_sliders(node, bishop_attacks, BISHOP, ~occ, FLAG_MOVE);
+
+  gen_sliders(node, rook_attacks,   ROOK,   ~occ, FLAG_MOVE);
+
+  gen_sliders(node, bishop_attacks, QUEEN,  ~occ, FLAG_MOVE);
+  gen_sliders(node, rook_attacks,   QUEEN,  ~occ, FLAG_MOVE);
+
+  gen_jumpers(node, king_attacks,   KING,   ~occ & ~opp_king_near, FLAG_MOVE);
+
+  if (node->pos.rights && !node->in_check)
+    gen_castling(node);
+
+}
+
+/*}}}*/
+
 /*}}}*/
 /*{{{  move iterators*/
 
@@ -2219,20 +2277,7 @@ HOT uint32_t get_next_search_move(Node *const node) {
       node->num_moves = 0;
       node->next_move = 0;
       
-      const Position *const pos = &node->pos;
-      const int stm = pos->stm;
-      const int opp = stm ^ 1;
-      const uint64_t opp_king = pos->all[piece_index(KING, opp)];
-      const uint64_t opp_king_near = king_attacks[bsf(opp_king)];
-      const uint64_t enemies = pos->colour[opp] & ~opp_king;
-      
-      gen_pawns_noisy(node);
-      gen_jumpers(node, knight_attacks, KNIGHT, enemies, FLAG_CAPTURE);
-      gen_sliders(node, bishop_attacks, BISHOP, enemies, FLAG_CAPTURE);
-      gen_sliders(node, rook_attacks,   ROOK,   enemies, FLAG_CAPTURE);
-      gen_sliders(node, bishop_attacks, QUEEN,  enemies, FLAG_CAPTURE);
-      gen_sliders(node, rook_attacks,   QUEEN,  enemies, FLAG_CAPTURE);
-      gen_jumpers(node, king_attacks,   KING,   enemies & ~opp_king_near, FLAG_CAPTURE);
+      gen_noisy(node);
       
       if (node->tt_move)
         remove_tt_move(node);
@@ -2255,22 +2300,7 @@ HOT uint32_t get_next_search_move(Node *const node) {
       node->num_moves = 0;
       node->next_move = 0;
       
-      const Position *const pos = &node->pos;
-      const int stm = pos->stm;
-      const int opp = stm ^ 1;
-      const uint64_t occ = pos->occupied;
-      const uint64_t opp_king = pos->all[piece_index(KING, opp)];
-      const uint64_t opp_king_near = king_attacks[bsf(opp_king)];
-      
-      gen_pawns_quiet(node);
-      gen_jumpers(node, knight_attacks, KNIGHT, ~occ, FLAG_MOVE);
-      gen_sliders(node, bishop_attacks, BISHOP, ~occ, FLAG_MOVE);
-      gen_sliders(node, rook_attacks,   ROOK,   ~occ, FLAG_MOVE);
-      gen_sliders(node, bishop_attacks, QUEEN,  ~occ, FLAG_MOVE);
-      gen_sliders(node, rook_attacks,   QUEEN,  ~occ, FLAG_MOVE);
-      gen_jumpers(node, king_attacks,   KING,   ~occ & ~opp_king_near, FLAG_MOVE);
-      if (node->pos.rights && !node->in_check)
-        gen_castling(node);
+      gen_quiet(node);
       
       if (node->tt_move)
         remove_tt_move(node);
@@ -2340,20 +2370,7 @@ HOT uint32_t get_next_qsearch_move(Node *const node) {
       node->num_moves = 0;
       node->next_move = 0;
       
-      const Position *const pos = &node->pos;
-      const int stm = pos->stm;
-      const int opp = stm ^ 1;
-      const uint64_t opp_king = pos->all[piece_index(KING, opp)];
-      const uint64_t opp_king_near = king_attacks[bsf(opp_king)];
-      const uint64_t enemies = pos->colour[opp] & ~opp_king;
-      
-      gen_pawns_noisy(node);
-      gen_jumpers(node, knight_attacks, KNIGHT, enemies, FLAG_CAPTURE);
-      gen_sliders(node, bishop_attacks, BISHOP, enemies, FLAG_CAPTURE);
-      gen_sliders(node, rook_attacks,   ROOK,   enemies, FLAG_CAPTURE);
-      gen_sliders(node, bishop_attacks, QUEEN,  enemies, FLAG_CAPTURE);
-      gen_sliders(node, rook_attacks,   QUEEN,  enemies, FLAG_CAPTURE);
-      gen_jumpers(node, king_attacks,   KING,   enemies & ~opp_king_near, FLAG_CAPTURE);
+      gen_noisy(node);
       
       if (node->tt_move)
         remove_tt_move(node);
@@ -2386,6 +2403,21 @@ HOT uint32_t get_next_qsearch_move(Node *const node) {
 
 /*}}}*/
 
+/*{{{  init_next_perft_move*/
+
+void init_next_perft_move(Node *const node, const int in_check) {
+
+  node->num_moves = 0;
+  node->next_move = 0;
+  node->in_check  = in_check;
+  node->tt_move   = 0; // unused
+
+  gen_noisy(node);
+  gen_quiet(node);
+
+}
+
+/*}}}*/
 
 /*}}}*/
 /*{{{  move makers*/
@@ -3351,7 +3383,7 @@ int qsearch(const int ply, int alpha, const int beta) {
     const int score = -qsearch(ply+1, -beta, -alpha);
 
     if (score >= beta) {
-      return beta;
+      return score;
     }
 
     if (score > alpha) {
@@ -3420,7 +3452,7 @@ int search(const int ply, int depth, int alpha, const int beta) {
   /*}}}*/
 
   const int is_root    = ply == 0;
-  const int is_pv      = alpha + 1 != beta;
+  const int is_pv      = is_root || alpha + 1 != beta;
   const int orig_alpha = alpha;
 
   /*{{{  check tt*/
@@ -3429,16 +3461,16 @@ int search(const int ply, int depth, int alpha, const int beta) {
   
   uint32_t tt_move = 0;
   
-  //if (entry && entry->depth >= depth) {
+  if (!is_pv && entry && entry->depth >= depth) {
   
-    //const int flags = entry->flags;
-    //const int score = entry->score;
+    const int flags = entry->flags;
+    const int score = entry->score;
   
-    //if (flags == TT_EXACT || (flags == TT_BETA && score >= beta) || (flags == TT_ALPHA && score <= alpha)) {
-    //  return score;
-    //}
+    if (flags == TT_EXACT || (flags == TT_BETA && score >= beta) || (flags == TT_ALPHA && score <= alpha)) {
+      return score;
+    }
   
-  //}
+  }
   
   if (entry && entry->move)
     tt_move = probably_legal(this_pos, entry->move);
@@ -3476,14 +3508,29 @@ int search(const int ply, int depth, int alpha, const int beta) {
     
     lazy.net_func(next_node);
     
-    num_legal_moves++;
-    
     if (!tc.bm)
       tc.bm = move;
     
     /*}}}*/
 
-    score = -search(ply+1, depth-1, -beta, -alpha);
+    num_legal_moves++;
+
+    /*{{{  search*/
+    
+    if (is_pv && num_legal_moves > 1) {
+    
+      score = -search(ply+1, depth-1, -alpha-1, -alpha);
+    
+      if (!tc.finished && score > alpha) {
+        score = -search(ply+1, depth-1, -beta, -alpha);
+      }
+    }
+    
+    else {
+      score = -search(ply+1, depth-1, -beta, -alpha);
+    }
+    
+    /*}}}*/
 
     if (tc.finished)
       return 0;
@@ -3658,11 +3705,15 @@ uint64_t perft(const int ply, const int depth) {
   uint64_t tot_nodes = 0;
   uint32_t move;
 
-  init_next_search_move(this_node, is_attacked(this_pos, bsf(this_pos->all[stm_king_sq]), opp), 0);
+  //init_next_search_move(this_node, is_attacked(this_pos, bsf(this_pos->all[stm_king_sq]), opp), 0);
+  init_next_perft_move(this_node, is_attacked(this_pos, bsf(this_pos->all[stm_king_sq]), opp));
 
   const uint64_t *const next_stm_king_ptr = &next_pos->all[stm_king_sq];
 
-  while ((move = get_next_search_move(this_node))) {
+  //while ((move = get_next_search_move(this_node))) {
+  for (int i=0; i < this_node->num_moves; i++) {
+
+    move = this_node->moves[i];
 
     *next_pos = *this_pos;
     make_move(next_pos, move);
@@ -3703,12 +3754,13 @@ void perft_tests () {
       errors += 1;
 
     printf("%s %s %d (%" PRIu64 ") %" PRIu64 " %" PRIu64 "\n",
-    p->label,
-    p->fen,
-    p->depth,
-    num_nodes - p->expected,
-    num_nodes,
-    p->expected);
+      p->label,
+      p->fen,
+      p->depth,
+      num_nodes - p->expected,
+      num_nodes,
+      p->expected
+    );
 
   }
 
