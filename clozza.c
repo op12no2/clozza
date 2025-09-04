@@ -132,6 +132,7 @@ enum {
 #define TT_EXACT 1
 #define TT_ALPHA 2
 #define TT_BETA 4
+#define TT_DEFAULT 16
 
 /*}}}*/
 /*{{{  structs*/
@@ -271,6 +272,16 @@ typedef struct {
 } TT;
 
 /*}}}*/
+/*{{{  Opt*/
+
+typedef struct {
+
+  uint8_t beta_prune_depth;
+  uint8_t beta_prune_mult;
+
+} Opt;
+
+/*}}}*/
 
 /*}}}*/
 /*{{{  data*/
@@ -291,6 +302,7 @@ ALIGN64 Node ss[MAX_PLY];
 
 TimeControl tc;
 Lazy lazy;
+Opt opt;
 
 ALIGN64 uint64_t zob_pieces[12 * 64];
 ALIGN64 uint64_t zob_stm;
@@ -683,20 +695,16 @@ INLINE_HOT int32_t sqrelu(const int32_t x) {
 }
 
 /*}}}*/
-/*{{{  slow_log_floor*/
-
-size_t slow_log_floor(size_t n) {
-
-  size_t p = 1;
-
-  while (p <= n)
-    p <<= 1;
-
-  return p >> 1;
-
-}
 
 /*}}}*/
+/*{{{  opt*/
+
+void init_options () {
+
+  opt.beta_prune_depth = 8;
+  opt.beta_prune_mult  = 100;
+
+}
 
 /*}}}*/
 /*{{{  tc*/
@@ -783,22 +791,32 @@ HOT void check_tc() {
 
 /*{{{  init_tt*/
 
-int init_tt(const size_t megabytes) {
+int init_tt(size_t megabytes) {
+
+  if (megabytes < 1)
+    megabytes = 1;
+
+  if (megabytes > 1024)
+    megabytes = 1024;
+
+  if (tt) {
+    free(tt);
+    tt = NULL;
+  }
 
   const size_t bytes = megabytes * 1024ULL * 1024ULL;
 
-  tt_entries = slow_log_floor(bytes / sizeof(TT));
+  tt_entries = bytes / sizeof(TT);
+  tt_entries = 1ULL << (64 - __builtin_clzll(tt_entries));
   tt_mask    = tt_entries - 1;
-  tt         = malloc(tt_entries * sizeof(TT));
+  tt         = calloc(tt_entries, sizeof(TT));
 
   if (!tt) {
-    fprintf(stderr, "Failed to allocate TT\n");
+    fprintf(stderr, "info failed to allocate tt\n");
     return 1;
   }
 
   printf("info tt entries %zu\n", tt_entries);
-
-  assert(tt_entries == slow_log_floor(tt_entries) && "init_tt: not a power of 2");
 
   return 0;
 
@@ -2090,32 +2108,39 @@ void gen_castling(Node *const node) {
   int n = 0;
 
   if (stm == WHITE) {
+
     if ((rights & WHITE_RIGHTS_KING) &&
-        !(occupied & 0x0000000000000060ULL) &&
-        !is_attacked(pos, F1, opp) &&
-        !is_attacked(pos, G1, opp)) {
+         !(occupied & 0x0000000000000060ULL) &&
+         !is_attacked(pos, F1, opp) &&
+         !is_attacked(pos, G1, opp)) {
       m[n++] = encode_move(E1, G1, FLAG_CASTLE);
     }
+
     if ((rights & WHITE_RIGHTS_QUEEN) &&
-        !(occupied & 0x000000000000000EULL) &&
-        !is_attacked(pos, D1, opp) &&
-        !is_attacked(pos, C1, opp)) {
+         !(occupied & 0x000000000000000EULL) &&
+         !is_attacked(pos, D1, opp) &&
+         !is_attacked(pos, C1, opp)) {
       m[n++] = encode_move(E1, C1, FLAG_CASTLE);
     }
+
   }
+
   else {
+
     if ((rights & BLACK_RIGHTS_KING) &&
-        !(occupied & 0x6000000000000000ULL) &&
-        !is_attacked(pos, F8, opp) &&
-        !is_attacked(pos, G8, opp)) {
+         !(occupied & 0x6000000000000000ULL) &&
+         !is_attacked(pos, F8, opp) &&
+         !is_attacked(pos, G8, opp)) {
       m[n++] = encode_move(E8, G8, FLAG_CASTLE);
     }
+
     if ((rights & BLACK_RIGHTS_QUEEN) &&
-        !(occupied & 0x0E00000000000000ULL) &&
-        !is_attacked(pos, D8, opp) &&
-        !is_attacked(pos, C8, opp)) {
+         !(occupied & 0x0E00000000000000ULL) &&
+         !is_attacked(pos, D8, opp) &&
+         !is_attacked(pos, C8, opp)) {
       m[n++] = encode_move(E8, C8, FLAG_CASTLE);
     }
+
   }
 
   node->num_moves += n;
@@ -2131,9 +2156,9 @@ void gen_noisy(Node *const node) {
   const Position *const pos    = &node->pos;
   const int stm                = pos->stm;
   const int opp                = stm ^ 1;
-  const uint64_t opp_king      = pos->all[piece_index(KING, opp)];
-  const uint64_t opp_king_near = king_attacks[bsf(opp_king)];
-  const uint64_t enemies       = pos->colour[opp] & ~opp_king;
+  const uint64_t opp_king_bb   = pos->all[piece_index(KING, opp)];
+  const uint64_t opp_king_near = king_attacks[bsf(opp_king_bb)];
+  const uint64_t enemies       = pos->colour[opp] & ~opp_king_bb;
 
   gen_pawns_noisy(node);
 
@@ -2159,8 +2184,8 @@ void gen_quiet(Node *const node) {
   const int stm                = pos->stm;
   const int opp                = stm ^ 1;
   const uint64_t occ           = pos->occupied;
-  const uint64_t opp_king      = pos->all[piece_index(KING, opp)];
-  const uint64_t opp_king_near = king_attacks[bsf(opp_king)];
+  const uint64_t opp_king_bb   = pos->all[piece_index(KING, opp)];
+  const uint64_t opp_king_near = king_attacks[bsf(opp_king_bb)];
 
   gen_pawns_quiet(node);
 
@@ -2940,6 +2965,18 @@ HOT void make_move(Position *const pos, const uint32_t move) {
 /*}}}*/
 /*{{{  board*/
 
+/*{{{  ucinewgame*/
+
+void ucinewgame() {
+
+  if (!tt)
+    init_tt(TT_DEFAULT);
+
+  tt_reset();
+
+}
+
+/*}}}*/
 /*{{{  init_zob*/
 
 void init_zob() {
@@ -3351,15 +3388,19 @@ int qsearch(const int ply, int alpha, const int beta) {
   
   /*}}}*/
 
-  const int stm         = this_pos->stm;
-  const int opp         = stm ^ 1;
-  const int stm_king_sq = piece_index(KING, stm);
+  const int stm          = this_pos->stm;
+  const int opp          = stm ^ 1;
+  const int stm_king_idx = piece_index(KING, stm);
 
   uint32_t move;
 
+  /*{{{  init move iterator*/
+  
   init_next_qsearch_move(this_node, tt_move);
-
-  const uint64_t *const next_stm_king_ptr = &next_pos->all[stm_king_sq];
+  
+  const uint64_t *const next_stm_king_ptr = &next_pos->all[stm_king_idx];
+  
+  /*}}}*/
 
   while ((move = get_next_qsearch_move(this_node))) {
 
@@ -3420,10 +3461,10 @@ int search(const int ply, int depth, int alpha, const int beta) {
   const Position *const this_pos = &this_node->pos;
   Position *const next_pos       = &next_node->pos;
 
-  const int stm         = this_pos->stm;
-  const int opp         = stm ^ 1;
-  const int stm_king_sq = piece_index(KING, stm);
-  const int in_check    = is_attacked(this_pos, bsf(this_pos->all[stm_king_sq]), opp);
+  const int stm          = this_pos->stm;
+  const int opp          = stm ^ 1;
+  const int stm_king_idx = piece_index(KING, stm);
+  const int in_check     = is_attacked(this_pos, bsf(this_pos->all[stm_king_idx]), opp);
 
   /*{{{  horizon*/
   
@@ -3481,7 +3522,7 @@ int search(const int ply, int depth, int alpha, const int beta) {
 
   /*{{{  beta prune*/
   
-  if (!is_pv && !in_check && depth <= 8 && (ev - depth*100) >= beta)
+  if (!is_pv && !in_check && depth <= opt.beta_prune_depth && (ev - depth * opt.beta_prune_mult) >= beta)
   
     return ev;
   
@@ -3497,7 +3538,7 @@ int search(const int ply, int depth, int alpha, const int beta) {
   
   init_next_search_move(this_node, in_check, tt_move);
   
-  const uint64_t *const next_stm_king_ptr = &next_pos->all[stm_king_sq];
+  const uint64_t *const next_stm_king_ptr = &next_pos->all[stm_king_idx];
   
   /*}}}*/
 
@@ -3621,11 +3662,6 @@ int search(const int ply, int depth, int alpha, const int beta) {
 
 void go() {
 
-  if (debug_board_check(&ss[0])) { //hack
-    mylog("debug_board_check");
-    exit(1);
-  }
-
   int alpha = 0;
   int beta  = 0;
   int score = 0;
@@ -3663,6 +3699,8 @@ void go() {
 
 void bench () {
 
+  ucinewgame();
+
   const int num_fens = 50;
   uint64_t start_ms = now_ms();
   uint64_t total_nodes = 0;
@@ -3675,7 +3713,7 @@ void bench () {
     position(&ss[0], b->fen, b->stm, b->rights, b->ep);
 
     tc = (TimeControl){0};
-    tc.max_depth = 7;
+    tc.max_depth = 9;
     go();
 
     total_nodes += tc.nodes;
@@ -3706,34 +3744,52 @@ uint64_t perft(const int ply, const int depth) {
   Node *const next_node = &ss[ply+1];
 
   const Position *const this_pos = &this_node->pos;
-  Position *const next_pos = &next_node->pos;
+  Position *const next_pos       = &next_node->pos;
 
-  const int stm = this_pos->stm;
-  const int opp = stm ^ 1;
-  const int stm_king_sq = piece_index(KING, stm);
+  const int stm          = this_pos->stm;
+  const int opp          = stm ^ 1;
+  const int stm_king_idx = piece_index(KING, stm);
+  const int stm_king_sq  = bsf(this_pos->all[stm_king_idx]);
+  const int in_check     = is_attacked(this_pos, stm_king_sq, opp);
 
   uint64_t tot_nodes = 0;
   uint32_t move;
 
-  //init_next_search_move(this_node, is_attacked(this_pos, bsf(this_pos->all[stm_king_sq]), opp), 0);
-  init_next_perft_move(this_node, is_attacked(this_pos, bsf(this_pos->all[stm_king_sq]), opp));
+  init_next_perft_move(this_node, in_check);
 
-  const uint64_t *const next_stm_king_ptr = &next_pos->all[stm_king_sq];
+  const uint64_t *const next_stm_king_ptr = &next_pos->all[stm_king_idx];
 
-  //while ((move = get_next_search_move(this_node))) {
   for (int i=0; i < this_node->num_moves; i++) {
 
     move = this_node->moves[i];
 
+    /*{{{  copy make*/
+    
     *next_pos = *this_pos;
+    
     make_move(next_pos, move);
-
+    
     if (is_attacked(next_pos, bsf(*next_stm_king_ptr), opp))
       continue;
-
-    lazy.post_func(next_pos);
-
-    tot_nodes += perft(ply+1, depth-1);
+    
+    /*}}}*/
+    /*{{{  accumulate*/
+    
+    if (depth > 1) {
+    
+      lazy.post_func(next_pos);
+    
+      tot_nodes += perft(ply+1, depth-1);
+    
+    }
+    
+    else {
+    
+      tot_nodes ++;
+    
+    }
+    
+    /*}}}*/
 
   }
 
@@ -3796,6 +3852,7 @@ int init_once() {
 
   uint64_t start_ms = now_ms();
 
+  init_options();
   init_move_funcs();
   init_rights_masks();
   init_zob();
@@ -3809,10 +3866,6 @@ int init_once() {
 
   if (init_weights())
     return 1;
-
-  if (init_tt(16))  // hack
-    return 1;
-  tt_reset();       // hack
 
   uint64_t elapsed_ms = now_ms() - start_ms;
 
@@ -3853,6 +3906,11 @@ int uci_tokens(int num_tokens, char **tokens) {
   else if (!strcmp(cmd, "position") || !strcmp(cmd, "p")) {
     /*{{{  position*/
     
+    if (!tt) {
+      printf("info run a ucinewgame command or setoption name Hash value 16 (etc) command first\n");
+      return 0;
+    }
+    
     if (!strcmp(sub, "startpos") || !strcmp(sub, "s"))
       position(&ss[0], "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR", "w", "KQkq", "-");
     
@@ -3867,15 +3925,23 @@ int uci_tokens(int num_tokens, char **tokens) {
     
     /*}}}*/
   }
-  else if (!strcmp(cmd, "ucinewgame") || !strcmp(cmd, "u")) {
-    /*{{{  ucinewgame*/
-    
-    tt_reset();
-    
-    /*}}}*/
-  }
   else if (!strcmp(cmd, "go") || !strcmp(cmd, "g")) {
     /*{{{  go*/
+    
+    if (!tt) {
+      printf("info run a ucinewgame command or setoption name Hash value 16 (etc) command first\n");
+      return 0;
+    }
+    
+    if (ss[0].pos.hash == 0) {
+      printf("info run a position startpos (etc) command first\n");
+      return 0;
+    }
+    
+    if (debug_board_check(&ss[0])) { //hack
+      mylog("debug_board_check");
+      exit(1);
+    }
     
     int64_t wtime = 0;
     int64_t winc = 0;
@@ -3942,12 +4008,31 @@ int uci_tokens(int num_tokens, char **tokens) {
     
     /*}}}*/
   }
+  else if (!strcmp(cmd, "ucinewgame") || !strcmp(cmd, "u")) {
+    /*{{{  ucinewgame*/
+    
+    ucinewgame();
+    
+    /*}}}*/
+  }
   else if (!strcmp(cmd, "uci")) {
     /*{{{  uci*/
     
     printf("id name Clozza 8\n");
     printf("id author Colin Jenkins\n");
+    printf("option name Hash type spin default %d min 1 max 1024\n", TT_DEFAULT);
     printf("uciok\n");
+    
+    /*}}}*/
+  }
+  else if (!strcmp(cmd, "setoption")) {
+    /*{{{  setoption*/
+    
+    if (!strcmp(tokens[2], "Hash")) {
+    
+      init_tt(atoi(tokens[4]));
+    
+    }
     
     /*}}}*/
   }
@@ -3955,6 +4040,15 @@ int uci_tokens(int num_tokens, char **tokens) {
     /*{{{  board*/
     
     print_board(&ss[0]);
+    
+    /*}}}*/
+  }
+  else if (!strcmp(cmd, "h")) {
+    /*{{{  hash size*/
+    
+    const size_t mb = (tt_entries * sizeof(TT)) / (1024 * 2024);
+    
+    printf("%zu mb %zu slots %lu bytes/slot\n", mb, tt_entries, sizeof(TT));
     
     /*}}}*/
   }
