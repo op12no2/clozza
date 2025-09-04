@@ -12,3 +12,5 @@ Strength: stash-22.
 
 The code is best read using a folding editor. Start/end fold markers are ```/*{{{  fold name*/``` and ```/*}}}*/```.
 
+Command extensions: https://github.com/op12no2/clozza/wiki/Command-extensions
+
