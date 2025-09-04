@@ -3477,6 +3477,16 @@ int search(const int ply, int depth, int alpha, const int beta) {
   
   /*}}}*/
 
+  const int ev = eval(this_node);
+
+  /*{{{  beta prune*/
+  
+  if (!is_pv && !in_check && depth <= 8 && (ev - depth*100) >= beta)
+  
+    return ev;
+  
+  /*}}}*/
+
   uint32_t move       = 0;
   uint32_t best_move  = 0;
   int score           = alpha;
