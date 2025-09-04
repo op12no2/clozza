@@ -6,9 +6,9 @@ The only real difference is move generation: Lozza uses mailbox and Clozza uses 
 
 WIP, no releases yet.
 
-State: Negamax, Lozza 7 net, piece-to-history, TT move, staged movegen. 
+State: Negamax, QS, Lozza 7 net, piece-to history (quiet), MVV-LVA (noisy), TT move, staged movegen. 
 
-Strength: > stash-22.
+Strength: stash-22.
 
 The code is best read using a folding editor. Start/end fold markers are ```/*{{{  fold name*/``` and ```/*}}}*/```.
 
