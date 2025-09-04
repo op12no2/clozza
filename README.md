@@ -6,7 +6,7 @@ The only real difference is move generation: Lozza uses mailbox and Clozza uses 
 
 WIP, no releases yet.
 
-State: negamax, Lozza nn, piece-to-history, tt move, staged movegen. 
+State: negamax, Lozza 7 net, piece-to-history, TT move, staged movegen. 
 
 Strength: > stash-22.
 
