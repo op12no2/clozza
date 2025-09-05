@@ -90,13 +90,13 @@ enum {WPAWN, WKNIGHT, WBISHOP, WROOK, WQUEEN, WKING, BPAWN, BKNIGHT, BBISHOP, BR
 
 #define FLAG_SHIFT 12
 
-#define FLAG_MOVE          (1  << FLAG_SHIFT)
-#define FLAG_CAPTURE       (2  << FLAG_SHIFT)
-#define FLAG_PAWN_PUSH     (4  << FLAG_SHIFT)
-#define FLAG_EP_CAPTURE    (8  << FLAG_SHIFT)
-#define FLAG_CASTLE        (16 << FLAG_SHIFT)
-#define FLAG_PROMO_PUSH    (32 << FLAG_SHIFT)
-#define FLAG_PROMO_CAPTURE (64 << FLAG_SHIFT)
+#define FLAG_MOVE          (1   << FLAG_SHIFT)
+#define FLAG_CAPTURE       (2   << FLAG_SHIFT)
+#define FLAG_PAWN_PUSH     (4   << FLAG_SHIFT)
+#define FLAG_EP_CAPTURE    (8   << FLAG_SHIFT)
+#define FLAG_CASTLE        (16  << FLAG_SHIFT)
+#define FLAG_PROMO_PUSH    (32  << FLAG_SHIFT)
+#define FLAG_PROMO_CAPTURE (64  << FLAG_SHIFT)
 
 #define PROMO_SHIFT 20
 
@@ -150,7 +150,7 @@ typedef struct {
   uint8_t stm;
   uint8_t rights;
   uint8_t ep;
-  uint8_t flags;
+  uint8_t hmc;
 
   uint64_t hash;
 
@@ -691,6 +691,15 @@ INLINE_HOT int32_t sqrelu(const int32_t x) {
   const int32_t y = x & ~(x >> 31);
 
   return y * y;
+
+}
+
+/*}}}*/
+/*{{{  is_pawn*/
+
+INLINE_HOT int is_pawn(from_piece) {
+
+  return !piece | !(piece ^ 6)
 
 }
 
@@ -2485,6 +2494,7 @@ HOT void post_move(Position *const pos) {
   pos->stm    ^= 1;
   pos->rights = (uint8_t)rights;
   pos->ep     = (uint8_t)ep;
+  pos->hmc    = is_pawn(from_piece) ? 0 : pos->hmc + 1;
 
 }
 
@@ -2546,6 +2556,7 @@ HOT void post_capture(Position *const pos) {
   pos->stm    ^= 1;
   pos->rights = (uint8_t)rights;
   pos->ep     = (uint8_t)ep;
+  pos->hmc    = is_pawn(from_piece) ? 0 : pos->hmc + 1;
 
 }
 
@@ -2610,7 +2621,8 @@ HOT void post_push(Position *const pos) {
 
   pos->hash = hash;
   pos->stm  ^= 1;
-  pos->ep = (uint8_t)ep;
+  pos->ep   = (uint8_t)ep;
+  pos->hmc  = 0;
 
 }
 
@@ -2668,8 +2680,9 @@ HOT void post_ep_capture(Position *const pos) {
   hash ^= zob_stm;
 
   pos->hash = hash;
-  pos->stm ^= 1;
-  pos->ep = (uint8_t)ep;
+  pos->stm  ^= 1;
+  pos->ep   = (uint8_t)ep;
+  pos->hmc  = 0;
 
 }
 
@@ -2747,10 +2760,11 @@ HOT void post_castle(Position *const pos) {
 
   hash ^= zob_stm;
 
-  pos->hash = hash;
-  pos->stm ^= 1;
+  pos->hash   = hash;
+  pos->stm    ^= 1;
   pos->rights = (uint8_t)rights;
-  pos->ep = (uint8_t)ep;
+  pos->ep     = (uint8_t)ep;
+  pos->hmc    += 1;
 
 }
 
@@ -2820,6 +2834,7 @@ HOT void post_promo_push(Position *const pos) {
   pos->hash = hash;
   pos->stm  ^= 1;
   pos->ep   = (uint8_t)ep;
+  pos->hmc  = 0;
 
 }
 
@@ -2890,6 +2905,7 @@ HOT void post_promo_capture(Position *const pos) {
   pos->stm    ^= 1;
   pos->rights = (uint8_t)rights;
   pos->ep     = (uint8_t)ep;
+  pos->hmc    = 0;
 
 }
 
@@ -2953,7 +2969,7 @@ void init_move_funcs(void) {
 HOT void make_move(Position *const pos, const uint32_t move) {
 
   const uint32_t flags = (move & MASK_FLAGS) >> FLAG_SHIFT;
-  const int idx = bsf(flags);
+  const int idx        = bsf(flags);
 
   move_funcs[idx](pos, move);
 
@@ -3168,7 +3184,7 @@ void et () {
 /*}}}*/
 /*{{{  probably_legal*/
 
-HOT uint32_t probably_legal(const Position *pos, uint32_t move) {
+HOT uint32_t probably_legal(const Position *const pos, uint32_t move) {
 
   if (!move) {
     return 0;
@@ -3193,6 +3209,18 @@ HOT uint32_t probably_legal(const Position *pos, uint32_t move) {
   }
 
   return move;
+
+}
+
+/*}}}*/
+/*{{{  is_draw*/
+
+HOT int is_draw(const Position *const pos) {
+
+  if (pos->hmc == 95)
+    return 1;
+
+  return 0;
 
 }
 
@@ -3491,6 +3519,9 @@ int search(const int ply, int depth, int alpha, const int beta) {
   }
   
   /*}}}*/
+
+  if (is_draw(this_pos))
+    return 0;
 
   const int is_root    = ply == 0;
   const int is_pv      = is_root || alpha + 1 != beta;
