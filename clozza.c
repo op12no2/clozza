@@ -3017,9 +3017,59 @@ void init_zob() {
 }
 
 /*}}}*/
+/*{{{  eval*/
+
+HOT int eval(Node *const node) {
+
+  const Position *const pos = &node->pos;
+  const uint64_t *const a = pos->all;
+  const int num_pieces = popcount(pos->occupied);
+
+  if (num_pieces == 2)
+    return 0;
+
+  else if (num_pieces == 3 && (a[WKNIGHT] | a[BKNIGHT] | a[WBISHOP] | a[BBISHOP]))
+    return 0;
+
+  return net_eval(node);
+
+}
+
+/*}}}*/
+/*{{{  play_move*/
+
+void play_move(Node *const node, char *uci_move) {
+
+  char buf[6];
+
+  Position *const pos = &node->pos;
+  const int stm = pos->stm;
+  const int opp = stm ^ 1;
+  const int stm_king_sq = piece_index(KING, stm);
+  const int in_check = is_attacked(pos, bsf(pos->all[stm_king_sq]), opp);
+  uint32_t move;
+
+  init_next_search_move(node, in_check, 0);
+
+  while ((move = get_next_search_move(node))) {
+
+    format_move(move, buf);
+    if (!strcmp(uci_move, buf)) {
+      make_move(pos, move);
+      lazy.post_func(pos);
+      //lazy.net_func(node);
+      return;
+    }
+  }
+
+  fprintf(stderr, "info cannot find uci move %s\n", uci_move);
+
+}
+
+/*}}}*/
 /*{{{  position*/
 
-void position(Node *const node, const char *board_fen, const char *stm_str, const char *rights_str, const char *ep_str) {
+void position(Node *const node, const char *board_fen, const char *stm_str, const char *rights_str, const char *ep_str, int num_uci_moves, char **uci_moves) {
 
   Position *const pos = &node->pos;
 
@@ -3111,59 +3161,13 @@ void position(Node *const node, const char *board_fen, const char *stm_str, cons
   
   /*}}}*/
 
+  for (int m=0; m < num_uci_moves; m++) {
+    play_move(node, uci_moves[m]);
+  }
+
   net_rebuild_accs(node);
 
   memset(piece_to_history, 0, sizeof(piece_to_history));
-
-}
-
-/*}}}*/
-/*{{{  eval*/
-
-HOT int eval(Node *const node) {
-
-  const Position *const pos = &node->pos;
-  const uint64_t *const a = pos->all;
-  const int num_pieces = popcount(pos->occupied);
-
-  if (num_pieces == 2)
-    return 0;
-
-  else if (num_pieces == 3 && (a[WKNIGHT] | a[BKNIGHT] | a[WBISHOP] | a[BBISHOP]))
-    return 0;
-
-  return net_eval(node);
-
-}
-
-/*}}}*/
-/*{{{  play_move*/
-
-void play_move(Node *const node, char *uci_move) {
-
-  char buf[6];
-
-  Position *const pos = &node->pos;
-  const int stm = pos->stm;
-  const int opp = stm ^ 1;
-  const int stm_king_sq = piece_index(KING, stm);
-  const int in_check = is_attacked(pos, bsf(pos->all[stm_king_sq]), opp);
-  uint32_t move;
-
-  init_next_search_move(node, in_check, 0);
-
-  while ((move = get_next_search_move(node))) {
-
-    format_move(move, buf);
-    if (!strcmp(uci_move, buf)) {
-      make_move(pos, move);
-      lazy.post_func(pos);
-      lazy.net_func(node);
-      return;
-    }
-  }
-
-  fprintf(stderr, "info cannot find uci move %s\n", uci_move);
 
 }
 
@@ -3177,7 +3181,7 @@ void et () {
   for (int i=0; i < num_fens; i++) {
 
     const Bench *b = &bench_data[i];
-    position(&ss[0], b->fen, b->stm, b->rights, b->ep);
+    position(&ss[0], b->fen, b->stm, b->rights, b->ep, 0, NULL);
     int e = net_eval(&ss[0]);
     printf("%d %s %s %s %s\n", e, b->fen, b->stm, b->rights, b->ep);
 
@@ -3697,6 +3701,11 @@ int search(const int ply, int depth, int alpha, const int beta) {
 
 void go() {
 
+  if (debug_board_check(&ss[0])) {  // hack
+    mylog("play_moves ue prob");
+    exit(1);
+  }
+
   int alpha = 0;
   int beta  = 0;
   int score = 0;
@@ -3745,7 +3754,7 @@ void bench () {
     const Bench *b = &bench_data[i];
 
     printf("%s %s %s %s\n", b->fen, b->stm, b->rights, b->ep);
-    position(&ss[0], b->fen, b->stm, b->rights, b->ep);
+    position(&ss[0], b->fen, b->stm, b->rights, b->ep, 0, NULL);
 
     tc = (TimeControl){0};
     tc.max_depth = 10;
@@ -3846,7 +3855,7 @@ void perft_tests () {
 
     const Perft *p = &perft_data[i];
 
-    position(&ss[0], p->fen, p->stm, p->rights, p->ep);
+    position(&ss[0], p->fen, p->stm, p->rights, p->ep, 0, NULL);
 
     uint64_t num_nodes = perft(0, p->depth);
     total_nodes += num_nodes;
@@ -3946,17 +3955,30 @@ int uci_tokens(int num_tokens, char **tokens) {
       return 0;
     }
     
+    /*{{{  get pointer to moves and number of moves*/
+    
+    char **moves_pointer = NULL;
+    int num_moves        = 0;
+    int moves_index      = find_token("moves", num_tokens, tokens);
+    
+    if (moves_index != -1)
+      num_moves = num_tokens - (moves_index + 1);
+    
+    if (num_moves > 0)
+      moves_pointer = &tokens[moves_index + 1];
+    
+    else
+      num_moves = 0;
+    
+    /*}}}*/
+    
     if (!strcmp(sub, "startpos") || !strcmp(sub, "s"))
-      position(&ss[0], "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR", "w", "KQkq", "-");
     
-    else if (!strcmp(sub, "fen") || !strcmp(sub, "f") )
-      position(&ss[0], tokens[2], tokens[3], tokens[4], tokens[5]);
+      position(&ss[0], "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR", "w", "KQkq", "-", num_moves, moves_pointer);
     
-    int n = find_token("moves", num_tokens, tokens);
-    if (n > 0) {
-      for (int i=n+1; i < num_tokens; i++)
-        play_move(&ss[0], tokens[i]);
-    }
+    else if (!strcmp(sub, "fen") || !strcmp(sub, "f"))
+    
+      position(&ss[0], tokens[2], tokens[3], tokens[4], tokens[5], num_moves, moves_pointer);
     
     /*}}}*/
   }
