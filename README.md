@@ -6,7 +6,7 @@ The only real difference is move generation: Lozza uses mailbox and Clozza uses 
 
 WIP, no releases yet.
 
-Current strength: stash-28
+Current strength: > stash-28
 
 The code is best read using a folding editor. Start/end fold markers are ```/*{{{  fold name*/``` and ```/*}}}*/```.
 
