@@ -16,6 +16,9 @@
 /*}}}*/
 /*{{{  macros*/
 
+#define max(a,b) (( (a) > (b) ) ? (a) : (b))
+#define min(a,b) (( (a) < (b) ) ? (a) : (b))
+
 #if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
   #include <stdalign.h>
   #define ALIGN64 alignas(64)
@@ -150,7 +153,6 @@ typedef struct {
   uint8_t stm;
   uint8_t rights;
   uint8_t ep;
-  uint8_t hmc;
 
   uint64_t hash;
 
@@ -276,8 +278,12 @@ typedef struct {
 
 typedef struct {
 
-  uint8_t beta_prune_depth;
-  uint8_t beta_prune_mult;
+  int beta_prune_depth;
+  int beta_prune_mult;
+  int lmr_min_depth;
+  int lmr_min_moves;
+  int lmr_depth_div;
+  int lmr_moves_div;
 
 } Opt;
 
@@ -697,9 +703,9 @@ INLINE_HOT int32_t sqrelu(const int32_t x) {
 /*}}}*/
 /*{{{  is_pawn*/
 
-INLINE_HOT int is_pawn(from_piece) {
+INLINE_HOT int is_pawn(const int piece) {
 
-  return !piece | !(piece ^ 6)
+  return !piece | !(piece ^ 6);
 
 }
 
@@ -712,6 +718,10 @@ void init_options () {
 
   opt.beta_prune_depth = 8;
   opt.beta_prune_mult  = 100;
+  opt.lmr_min_depth    = 3;
+  opt.lmr_min_moves    = 6;
+  opt.lmr_depth_div    = 5;
+  opt.lmr_moves_div    = 20;
 
 }
 
@@ -2494,7 +2504,6 @@ HOT void post_move(Position *const pos) {
   pos->stm    ^= 1;
   pos->rights = (uint8_t)rights;
   pos->ep     = (uint8_t)ep;
-  pos->hmc    = is_pawn(from_piece) ? 0 : pos->hmc + 1;
 
 }
 
@@ -2556,7 +2565,6 @@ HOT void post_capture(Position *const pos) {
   pos->stm    ^= 1;
   pos->rights = (uint8_t)rights;
   pos->ep     = (uint8_t)ep;
-  pos->hmc    = is_pawn(from_piece) ? 0 : pos->hmc + 1;
 
 }
 
@@ -2622,7 +2630,6 @@ HOT void post_push(Position *const pos) {
   pos->hash = hash;
   pos->stm  ^= 1;
   pos->ep   = (uint8_t)ep;
-  pos->hmc  = 0;
 
 }
 
@@ -2682,7 +2689,6 @@ HOT void post_ep_capture(Position *const pos) {
   pos->hash = hash;
   pos->stm  ^= 1;
   pos->ep   = (uint8_t)ep;
-  pos->hmc  = 0;
 
 }
 
@@ -2764,7 +2770,6 @@ HOT void post_castle(Position *const pos) {
   pos->stm    ^= 1;
   pos->rights = (uint8_t)rights;
   pos->ep     = (uint8_t)ep;
-  pos->hmc    += 1;
 
 }
 
@@ -2834,7 +2839,6 @@ HOT void post_promo_push(Position *const pos) {
   pos->hash = hash;
   pos->stm  ^= 1;
   pos->ep   = (uint8_t)ep;
-  pos->hmc  = 0;
 
 }
 
@@ -2905,7 +2909,6 @@ HOT void post_promo_capture(Position *const pos) {
   pos->stm    ^= 1;
   pos->rights = (uint8_t)rights;
   pos->ep     = (uint8_t)ep;
-  pos->hmc    = 0;
 
 }
 
@@ -3213,18 +3216,6 @@ HOT uint32_t probably_legal(const Position *const pos, uint32_t move) {
 }
 
 /*}}}*/
-/*{{{  is_draw*/
-
-HOT int is_draw(const Position *const pos) {
-
-  if (pos->hmc == 95)
-    return 1;
-
-  return 0;
-
-}
-
-/*}}}*/
 
 /*}}}*/
 /*{{{  debug*/
@@ -3520,14 +3511,11 @@ int search(const int ply, int depth, int alpha, const int beta) {
   
   /*}}}*/
 
-  if (is_draw(this_pos))
-    return 0;
-
   const int is_root    = ply == 0;
   const int is_pv      = is_root || alpha + 1 != beta;
   const int orig_alpha = alpha;
 
-  /*{{{  check tt*/
+  /*{{{  tt*/
   
   const TT *const RESTRICT entry = tt_get(this_pos);
   
@@ -3558,6 +3546,8 @@ int search(const int ply, int depth, int alpha, const int beta) {
     return ev;
   
   /*}}}*/
+
+  const int do_lmr = depth >= opt.lmr_min_depth;
 
   uint32_t move       = 0;
   uint32_t best_move  = 0;
@@ -3599,16 +3589,30 @@ int search(const int ply, int depth, int alpha, const int beta) {
 
     /*{{{  search*/
     
-    if (is_pv && num_legal_moves > 1) {
+    /*{{{  reductions*/
     
-      score = -search(ply+1, depth-1, -alpha-1, -alpha);
+    int r = 0;
     
-      if (!tc.finished && score > alpha) {
-        score = -search(ply+1, depth-1, -beta, -alpha);
-      }
+    if (do_lmr && num_legal_moves >= opt.lmr_min_moves) {
+    
+      r = depth/opt.lmr_depth_div + num_legal_moves/opt.lmr_moves_div;
+      r -= in_check;
+    
     }
     
-    else {
+    r = max(0, r);
+    
+    /*}}}*/
+    
+    const int null_window = (is_pv && num_legal_moves > 1) || r;
+    
+    score = alpha;
+    
+    if (null_window) {
+      score = -search(ply+1, depth-1-r, -alpha-1, -alpha);
+    }
+    
+    if (!tc.finished && (score > alpha || !null_window)) {
       score = -search(ply+1, depth-1, -beta, -alpha);
     }
     
@@ -3744,7 +3748,7 @@ void bench () {
     position(&ss[0], b->fen, b->stm, b->rights, b->ep);
 
     tc = (TimeControl){0};
-    tc.max_depth = 9;
+    tc.max_depth = 10;
     go();
 
     total_nodes += tc.nodes;
