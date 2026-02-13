@@ -1,0 +1,14 @@
+[
+{
+  "name": "c",
+  "command": "/home/xyzzy/clozza/clozza",
+  "protocol": "uci",
+  "stderrFile": "/home/xyzzy/clozza/clozza.log"
+},
+{
+  "name": "js",
+  "command": "/home/xyzzy/.nvm/versions/node/v18.12.1/bin/node /home/xyzzy/clozza/clozza.js",
+  "protocol": "uci"
+}
+]
+
